@@ -23,24 +23,17 @@ import {
   makeComponent,
   normalizeRotation,
   pinKey,
-  removeComponentsCascade,
-  removeEdgesCascade,
-  isPinEndpoint,
+  removeComponents,
+  removeEdges,
   type RlcDoc,
   type RlcEdge,
   type RlcEdgeEndpoint,
   type RlcKind,
-  type RlcPinEndpoint,
   type RlcRotation,
   type RlcWireGeometry,
   type Pt,
 } from "./rlcModel";
-import {
-  routeDocument,
-  solveTap,
-  type RlcRoutedWire,
-  type RlcTapSolution,
-} from "./rlcRouting";
+import { routeDocument, type RlcRoutedWire } from "./rlcRouting";
 import { waypointsToSvgPath } from "../pathfinding";
 import {
   DOC_VERSION,
@@ -71,16 +64,9 @@ interface EditorState {
   selected: SelectionKind;
   selectedId: string | null;
   /** Pin the user clicked first while drawing a wire, if any. */
-  pendingPin: RlcPinEndpoint | null;
+  pendingPin: RlcEdgeEndpoint | null;
   /** Cursor position of the in-flight wire preview, in world pixels. */
   previewPoint: Pt | null;
-
-  /** Wire under the cursor while a connection is being drawn (for the highlight). */
-  hoverWireId: string | null;
-  /** Cached tap solution for (pendingPin, hoverWireId). Recomputed only when that pair changes. */
-  tapSolution: RlcTapSolution | null;
-  /** Why a requested tap could not be solved, for an honest message instead of silence. */
-  tapError: string | null;
 
   avoidWires: boolean;
   showGrid: boolean;
@@ -110,14 +96,9 @@ interface EditorState {
   startWire: (componentId: string, pinId: "p0" | "p1") => void;
   updatePreview: (pt: Pt | null) => void;
   completeWire: (componentId: string, pinId: "p0" | "p1") => void;
-  /** Tap the hovered wire with the pending pin. Returns true when a wire was created. */
-  completeTap: (edgeId: string) => boolean;
   cancelWire: () => void;
   /** Mark the END of a multi-step interaction: persist the transient edits. */
   endInteraction: () => void;
-
-  /** Update the hover highlight and (re)solve the tap for the hovered wire. */
-  setHoverWire: (edgeId: string | null) => void;
 
   /** Declare a node as a port / ground, or clear it. Keyed by pin key or net name. */
   togglePort: (netName: string) => void;
@@ -201,21 +182,21 @@ function isPinId(v: unknown): v is "p0" | "p1" {
 
 /**
  * Normalise one endpoint.
+ * Accepts the plain `{componentId, pinId}` shape, which is what both v1 and the current build
+ * write. Anything else is rejected rather than guessed at.
  *
- * Accepts the v1 shape (`{componentId, pinId}` with no `kind`) and promotes it to a pin
- * endpoint, so every v1 document loads unchanged. Anything else is rejected rather than
- * guessed at.
+ * A document written by the experimental build that allowed a wire to end on ANOTHER wire
+ * carries endpoints of that other shape; those are rejected here, and the loader reports them
+ * so the user is told rather than shown a silently altered drawing.
  */
-function normalizeEndpoint(raw: unknown, edgeIds: Set<string>): RlcEdgeEndpoint | null {
+function normalizeEndpoint(raw: unknown): RlcEdgeEndpoint | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
-  if (r.kind === "tap" || (typeof r.edgeId === "string" && r.kind !== "pin")) {
-    if (typeof r.edgeId !== "string" || !edgeIds.has(r.edgeId)) return null;
-    if (!Number.isFinite(r.x) || !Number.isFinite(r.y)) return null;
-    return { kind: "tap", edgeId: r.edgeId, x: Number(r.x), y: Number(r.y) };
-  }
+  // Reject anything that is not a pin endpoint, including the retired wire-anchored shape.
+  if (r.kind !== undefined && r.kind !== "pin") return null;
+  if (r.edgeId !== undefined) return null;
   if (typeof r.componentId !== "string" || !isPinId(r.pinId)) return null;
-  return { kind: "pin", componentId: r.componentId, pinId: r.pinId };
+  return { componentId: r.componentId, pinId: r.pinId };
 }
 
 /**
@@ -246,28 +227,19 @@ function validateDoc(raw: unknown): { ok: true; doc: RlcDoc } | { ok: false; err
 
   const edges: RlcEdge[] = [];
   for (const e of rawEdges) {
-    const from = normalizeEndpoint(e.from, edgeIds);
-    const to = normalizeEndpoint(e.to, edgeIds);
-    if (!from) return { ok: false, error: `连线 ${e.id} 起点非法` };
-    if (!to) return { ok: false, error: `连线 ${e.id} 终点非法` };
+    const from = normalizeEndpoint(e.from);
+    const to = normalizeEndpoint(e.to);
+    if (!from) return { ok: false, error: `连线 ${e.id} 起点非法（不支持接在另一条线上的接点）` };
+    if (!to) return { ok: false, error: `连线 ${e.id} 终点非法（不支持接在另一条线上的接点）` };
     for (const end of [from, to]) {
-      if (isPinEndpoint(end) && !ids.has(end.componentId)) {
+      if (!ids.has(end.componentId)) {
         return { ok: false, error: `连线 ${e.id} 指向不存在的元件` };
       }
     }
-    if (isPinEndpoint(from) && isPinEndpoint(to) &&
-        from.componentId === to.componentId && from.pinId === to.pinId) {
+    if (from.componentId === to.componentId && from.pinId === to.pinId) {
       return { ok: false, error: `连线 ${e.id} 两端是同一个引脚` };
     }
     edges.push({ id: e.id as string, from, to });
-  }
-  // A tap must not target its own wire, and must not form a cycle through other taps.
-  for (const e of edges) {
-    for (const end of [e.from, e.to]) {
-      if (!isPinEndpoint(end) && end.edgeId === e.id) {
-        return { ok: false, error: `连线 ${e.id} 连接到自己` };
-      }
-    }
   }
 
   const order: RlcKind[] = ["resistor", "inductor", "capacitor"];
@@ -393,10 +365,6 @@ export const useRlcStore = create<EditorState>((set, get) => {
     saveLocal(doc);
   };
 
-  /** Cache key for a solved tap, so hover movement never re-solves the same pair. */
-  void ((pin: RlcPinEndpoint | null, wire: string | null) =>
-    pin && wire ? `${pin.componentId}.${pin.pinId}|${wire}` : "");
-
   return {
     doc: startDoc,
     routes: startRoutes,
@@ -408,9 +376,6 @@ export const useRlcStore = create<EditorState>((set, get) => {
     selectedId: null,
     pendingPin: null,
     previewPoint: null,
-    hoverWireId: null,
-    tapSolution: null,
-    tapError: null,
 
     avoidWires: hydrated.avoidWires,
     showGrid: true,
@@ -464,17 +429,17 @@ export const useRlcStore = create<EditorState>((set, get) => {
       const { selected, selectedId } = state;
       if (!selected || !selectedId) return;
       if (selected === "component") {
-        // Cascade: the part's wires, plus anything that tapped those wires.
-        commit(removeComponentsCascade(state.doc, [selectedId]));
+        // Removing a part also removes every wire attached to it.
+        commit(removeComponents(state.doc, [selectedId]));
       } else {
-        commit(removeEdgesCascade(state.doc, [selectedId]));
+        commit(removeEdges(state.doc, [selectedId]));
       }
       set({ selected: null, selectedId: null });
     },
 
     deleteEdge: (id) => {
       const state = get();
-      commit(removeEdgesCascade(state.doc, [id]));
+      commit(removeEdges(state.doc, [id]));
       if (state.selectedId === id) set({ selected: null, selectedId: null });
     },
 
@@ -505,12 +470,9 @@ export const useRlcStore = create<EditorState>((set, get) => {
 
     startWire: (componentId, pinId) =>
       set({
-        pendingPin: { kind: "pin", componentId, pinId },
+        pendingPin: { componentId, pinId },
         selected: null,
         selectedId: null,
-        hoverWireId: null,
-        tapSolution: null,
-        tapError: null,
       }),
 
     updatePreview: (pt) => set({ previewPoint: pt }),
@@ -519,63 +481,18 @@ export const useRlcStore = create<EditorState>((set, get) => {
       const state = get();
       const pending = state.pendingPin;
       if (!pending) return;
-      set({ pendingPin: null, previewPoint: null, hoverWireId: null, tapSolution: null, tapError: null });
+      set({ pendingPin: null, previewPoint: null });
       if (pending.componentId === componentId && pending.pinId === pinId) return;
-      const target: RlcEdgeEndpoint = { kind: "pin", componentId, pinId };
+      const target: RlcEdgeEndpoint = { componentId, pinId };
       if (!canConnect(state.doc, pending, target)) return;
       commit(appendEdge(state.doc, pending, target));
     },
 
-    completeTap: (edgeId) => {
-      const state = get();
-      const pending = state.pendingPin;
-      if (!pending) return false;
-
-      // Solve against the CURRENT document, then verify the result is still a legal addition.
-      const solution =
-        state.tapSolution && state.hoverWireId === edgeId
-          ? state.tapSolution
-          : solveTap(state.doc, pending, edgeId, { baseGeometry: state.doc.geometry });
-      if (!solution) {
-        set({ tapError: "该连线无法从选定引脚接入（找不到避开元件与既有走线的路径）。" });
-        return false;
-      }
-      const target: RlcEdgeEndpoint = {
-        kind: "tap",
-        edgeId,
-        x: solution.junction.x,
-        y: solution.junction.y,
-      };
-      if (!canConnect(state.doc, pending, target)) {
-        set({ tapError: "该连接会形成自环：同一个节点被重复连接。" });
-        return false;
-      }
-      set({ pendingPin: null, previewPoint: null, hoverWireId: null, tapSolution: null, tapError: null });
-      commit(appendEdge(state.doc, pending, target));
-      return true;
-    },
-
-    cancelWire: () =>
-      set({ pendingPin: null, previewPoint: null, hoverWireId: null, tapSolution: null, tapError: null }),
+    cancelWire: () => set({ pendingPin: null, previewPoint: null }),
 
     endInteraction: () => {
       const state = get();
       saveLocal(state.doc);
-    },
-
-    setHoverWire: (edgeId) => {
-      const state = get();
-      if (edgeId === state.hoverWireId) return;
-      if (!edgeId || !state.pendingPin) {
-        set({ hoverWireId: edgeId, tapSolution: null, tapError: null });
-        return;
-      }
-      const solution = solveTap(state.doc, state.pendingPin, edgeId, { baseGeometry: state.doc.geometry });
-      set({
-        hoverWireId: edgeId,
-        tapSolution: solution,
-        tapError: solution ? null : "该连线无法从选定引脚接入。",
-      });
     },
 
     togglePort: (netName) => {
@@ -618,8 +535,6 @@ export const useRlcStore = create<EditorState>((set, get) => {
         selected: null,
         selectedId: null,
         pendingPin: null,
-        hoverWireId: null,
-        tapSolution: null,
       });
       saveLocal(doc);
     },
@@ -640,8 +555,6 @@ export const useRlcStore = create<EditorState>((set, get) => {
         selected: null,
         selectedId: null,
         pendingPin: null,
-        hoverWireId: null,
-        tapSolution: null,
       });
       saveLocal(doc);
     },
@@ -656,8 +569,6 @@ export const useRlcStore = create<EditorState>((set, get) => {
         selectedId: null,
         pendingPin: null,
         previewPoint: null,
-        hoverWireId: null,
-        tapSolution: null,
         geometryStatus: "none",
       });
     },
@@ -710,8 +621,6 @@ export const useRlcStore = create<EditorState>((set, get) => {
         selected: null,
         selectedId: null,
         pendingPin: null,
-        hoverWireId: null,
-        tapSolution: null,
       });
       saveLocal(doc);
       return { ok: true };
@@ -779,30 +688,22 @@ function appendEdge(doc: RlcDoc, from: RlcEdgeEndpoint, to: RlcEdgeEndpoint): Rl
 /**
  * Would this connection be legal?
  *
- * Two rules, both about the netlist being a TREE (which is what scikit-rf needs to build a
- * circuit without duplicate node references):
+ * Two rules, both about the netlist being a TREE (which is what scikit-rf needs in order to
+ * build a circuit without duplicate node references):
  *
- *   1. The exact same pair of endpoints must not already be wired.
- *   2. The two sides must not ALREADY be on the same node — that would close a loop. This is
- *      the rule that makes a tap onto a wire you are already connected to a no-op instead of
+ *   1. The exact same pair of pins must not already be wired.
+ *   2. The two pins must not ALREADY be on the same node — that would close a loop. This is
+ *      the rule that turns wiring two pins of an already-joined node into a no-op instead of
  *      a silent short.
  */
 function canConnect(doc: RlcDoc, from: RlcEdgeEndpoint, to: RlcEdgeEndpoint): boolean {
-  const same = (a: RlcEdgeEndpoint, b: RlcEdgeEndpoint) => {
-    if (isPinEndpoint(a) && isPinEndpoint(b)) {
-      return a.componentId === b.componentId && a.pinId === b.pinId;
-    }
-    if (!isPinEndpoint(a) && !isPinEndpoint(b)) {
-      return a.edgeId === b.edgeId && a.x === b.x && a.y === b.y;
-    }
-    return false;
-  };
+  const same = (a: RlcEdgeEndpoint, b: RlcEdgeEndpoint) =>
+    a.componentId === b.componentId && a.pinId === b.pinId;
   for (const e of doc.edges) {
     if ((same(e.from, from) && same(e.to, to)) || (same(e.to, from) && same(e.from, to))) return false;
   }
 
-  // Union-find over the derived netlist elements, then ask whether the two ends are already
-  // in the same net.
+  // Union-find over pin/wire elements, then ask whether the two ends are already in one net.
   const parent = new Map<string, string>();
   const find = (x: string): string => {
     let r = parent.get(x) ?? x;
@@ -819,8 +720,7 @@ function canConnect(doc: RlcDoc, from: RlcEdgeEndpoint, to: RlcEdgeEndpoint): bo
     const rb = find(b);
     if (ra !== rb) parent.set(ra, rb);
   };
-  const elemOf = (e: RlcEdgeEndpoint) =>
-    isPinEndpoint(e) ? `p:${pinKey(e.componentId, e.pinId)}` : `w:${e.edgeId}`;
+  const elemOf = (e: RlcEdgeEndpoint) => `p:${pinKey(e.componentId, e.pinId)}`;
   for (const e of doc.edges) {
     union(`w:${e.id}`, elemOf(e.from));
     union(`w:${e.id}`, elemOf(e.to));

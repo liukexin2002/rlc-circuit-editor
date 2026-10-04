@@ -12,22 +12,18 @@
  * Coordinate system: world pixels, y grows downward (SVG convention).
  * All component origins and all pin positions land on the GRID lattice.
  *
- * ── DOCUMENT VERSION 2 ───────────────────────────────────────────────────────
- * v2 adds two things v1 could not express:
+ * ── DOCUMENT VERSION 2 ────────────────────────────────────────────────────
+ * v2 added STORED GEOMETRY: every wire's solved polyline is kept in `geometry`, which is
+ * what makes reopening a saved file pixel-identical instead of a re-route that merely
+ * "should" look the same. The canvas renders the stored polyline, and a re-route is only
+ * ever used to CHECK it — a mismatch is reported, never silently redrawn.
  *
- *   a) WIRE-TO-WIRE TAPS. A wire endpoint is now either a component pin or a point on
- *      another wire (`kind: "tap"`). That point is a Steiner point of the resulting
- *      rectilinear tree: it is where a newly grown branch meets the existing wire, so the
- *      new wire is as short as the geometry allows.
+ * v2 also added PORT / GROUND declarations, anchored to stable pin ids so a numbering change
+ * cannot move them onto a different node.
  *
- *   b) STORED GEOMETRY. Every wire's solved polyline is kept in `geometry`. This is what
- *      makes reopening a saved file pixel-identical instead of a re-route that merely
- *      "should" look the same: the canvas renders the stored polyline, and a re-route is
- *      only ever used to CHECK it (a mismatch is reported, never silently redrawn).
- *
- * Migration from v1 is total and lossless for everything v1 could express: v1 endpoints
- * become `kind: "pin"`, and a v1 document carries no `geometry`, so the editor solves each
- * wire once on open and records it. Nothing about a v1 document's appearance changes.
+ * Migration from v1 is total and lossless: a v1 endpoint already has the same shape (a
+ * component id plus a pin id), and a v1 document carries no `geometry`, so the editor solves
+ * each wire once on open and records it. Nothing about a v1 document's appearance changes.
  */
 
 import { GRID, SYMBOL_SPAN, SYMBOL_BODY_H, PIN_STUB, DOC_VERSION } from "./rlcConstants";
@@ -73,29 +69,10 @@ export interface RlcComponent {
 }
 
 /** A wire end anchored on a component pin. */
-export interface RlcPinEndpoint {
-  kind: "pin";
+export interface RlcEdgeEndpoint {
   componentId: string;
   pinId: RlcPin["id"];
 }
-
-/**
- * A wire end anchored on another wire — the Steiner point of an incremental branch.
- *
- * `x`/`y` is the solved junction. It is a real stored coordinate (not a fraction along the
- * host) because that is what makes reopening a file reproducible; the router still PROJECTS
- * it onto the host's current polyline whenever it routes, so if the host later moves the
- * junction follows it rather than floating in space.
- */
-export interface RlcTapEndpoint {
-  kind: "tap";
-  /** The wire this endpoint taps. */
-  edgeId: string;
-  x: number;
-  y: number;
-}
-
-export type RlcEdgeEndpoint = RlcPinEndpoint | RlcTapEndpoint;
 
 export interface RlcEdge {
   id: string;
@@ -180,48 +157,23 @@ export const RLC_PINS: readonly RlcPin[] = [
   { id: "p1", localEnd: 1 },
 ] as const;
 
-// ── Endpoint helpers ─────────────────────────────────────────────────────────
-
-export function isPinEndpoint(e: RlcEdgeEndpoint): e is RlcPinEndpoint {
-  return e.kind === "pin";
-}
-
-export function isTapEndpoint(e: RlcEdgeEndpoint): e is RlcTapEndpoint {
-  return e.kind === "tap";
-}
+// ── Edge helpers ─────────────────────────────────────────────────────────────
 
 /** The other end of an edge. */
 export function otherEndpoint(edge: RlcEdge, end: RlcEdgeEndpoint): RlcEdgeEndpoint {
-  return edge.from === end || (isPinEndpoint(edge.from) && isPinEndpoint(end) &&
-    edge.from.componentId === end.componentId && edge.from.pinId === end.pinId)
+  return edge.from.componentId === end.componentId && edge.from.pinId === end.pinId
     ? edge.to
     : edge.from;
 }
 
 /**
- * Delete an edge, cascading to every wire that taps it.
+ * Delete edges and the geometry they own.
  *
- * A tap without its host would be a junction pointing at nothing, so the cascade is
- * transitive: removing e1 removes e2 (taps e1), which removes e3 (taps e2), and so on.
- * Pure, so the cascade is unit-testable without touching a store.
+ * Pure, so the rule is unit-testable without a store: an edge's stored polyline must never
+ * outlive the edge, or a stale path could be rendered for a wire that no longer exists.
  */
-export function removeEdgesCascade(doc: RlcDoc, edgeIds: readonly string[]): RlcDoc {
+export function removeEdges(doc: RlcDoc, edgeIds: readonly string[]): RlcDoc {
   const doomed = new Set(edgeIds);
-  // Fixpoint: keep absorbing wires that tap something already doomed.
-  for (;;) {
-    let grew = false;
-    for (const e of doc.edges) {
-      if (doomed.has(e.id)) continue;
-      for (const end of [e.from, e.to]) {
-        if (isTapEndpoint(end) && doomed.has(end.edgeId)) {
-          doomed.add(e.id);
-          grew = true;
-          break;
-        }
-      }
-    }
-    if (!grew) break;
-  }
   const geometry: Record<string, RlcWireGeometry> = {};
   for (const [id, g] of Object.entries(doc.geometry)) {
     if (!doomed.has(id)) geometry[id] = g;
@@ -233,25 +185,18 @@ export function removeEdgesCascade(doc: RlcDoc, edgeIds: readonly string[]): Rlc
   };
 }
 
-/** Delete a component and every wire attached to it (directly or through a tap cascade). */
-export function removeComponentsCascade(doc: RlcDoc, componentIds: readonly string[]): RlcDoc {
-  const doomedComponents = new Set(componentIds);
-  const doomedEdges = doc.edges
-    .filter(
-      (e) =>
-        (isPinEndpoint(e.from) && doomedComponents.has(e.from.componentId)) ||
-        (isPinEndpoint(e.to) && doomedComponents.has(e.to.componentId)),
-    )
-    .map((e) => e.id);
-  const pruned = removeEdgesCascade(doc, doomedEdges);
+/** Delete components together with every wire attached to them. */
+export function removeComponents(doc: RlcDoc, componentIds: readonly string[]): RlcDoc {
   const dead = new Set(componentIds);
-  const ports = doc.ports.filter((p) => !dead.has(p.split(".")[0]));
-  const grounds = doc.grounds.filter((p) => !dead.has(p.split(".")[0]));
+  const doomedEdges = doc.edges
+    .filter((e) => dead.has(e.from.componentId) || dead.has(e.to.componentId))
+    .map((e) => e.id);
+  const pruned = removeEdges(doc, doomedEdges);
   return {
     ...pruned,
     components: pruned.components.filter((c) => !dead.has(c.id)),
-    ports,
-    grounds,
+    ports: doc.ports.filter((p) => !dead.has(p.split(".")[0])),
+    grounds: doc.grounds.filter((p) => !dead.has(p.split(".")[0])),
   };
 }
 

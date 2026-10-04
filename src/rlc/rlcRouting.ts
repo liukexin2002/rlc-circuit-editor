@@ -26,6 +26,11 @@
  * Penalty zones instead make a wire PREFER another corridor while still allowing a shared
  * one when geometry leaves no alternative, which is how a schematic reads.
  *
+ * Ordering matters for EDITING, not just for determinism: edges are routed by NUMERIC id, so a
+ * newly created wire (the largest id) is always routed last and can never influence an older
+ * wire's geometry. That is what makes "adding a wire never moves an existing wire" provable
+ * rather than hopeful, and the tests assert it point for point.
+ *
  * Correctness is MEASURED, never assumed: `crossedObstacles`, `isOrthogonalPolyline`,
  * `endStubLengths` and `parallelOverlapCells` re-derive the rules from the router's own
  * output, and `routeOneWire` refuses an attempt whose result fails its own body check. The
@@ -52,21 +57,17 @@ import {
   obstacleRect,
   pinPos,
   pinSide,
-  isPinEndpoint,
   type PinSide,
   type Pt,
   type RlcDoc,
   type RlcEdge,
   type RlcEdgeEndpoint,
-  type RlcPinEndpoint,
   type RlcWireGeometry,
 } from "./rlcModel";
 import {
   COMFORT_PAD,
   OBSTACLE_PAD,
   STUB_CELLS,
-  TAP_ENDPOINT_INSET,
-  TAP_MAX_CANDIDATES,
   WIRE_CORNER_RADIUS,
 } from "./rlcConstants";
 
@@ -119,100 +120,6 @@ export function endpointGeometry(
   const comp = doc.components.find((c) => c.id === componentId);
   if (!comp) return null;
   return { pos: pinPos(comp, pinId), side: pinSide(comp, pinId), componentId };
-}
-
-/**
- * The component an endpoint belongs to, or null for a tap (which belongs to a wire, not a
- * part). Keeps callers that only know about parts working after taps were introduced.
- */
-export function endpointComponentId(e: RlcEdgeEndpoint): string | null {
-  return isPinEndpoint(e) ? e.componentId : null;
-}
-
-// ── Tap geometry (Steiner points on an existing wire) ───────────────────────
-
-/** Axis of the polyline segment that contains `p`; "h" if p sits on a horizontal run. */
-export function segmentAxisAt(pts: readonly Point[], p: Point): "h" | "v" {
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    if (a.y === b.y && p.y === a.y && p.x >= Math.min(a.x, b.x) && p.x <= Math.max(a.x, b.x)) return "h";
-    if (a.x === b.x && p.x === a.x && p.y >= Math.min(a.y, b.y) && p.y <= Math.max(a.y, b.y)) return "v";
-  }
-  // Off the polyline (should not happen after projection): fall back to the dominant axis.
-  return Math.abs(pts[pts.length - 1].y - pts[0].y) > Math.abs(pts[pts.length - 1].x - pts[0].x) ? "v" : "h";
-}
-
-/** The sides from which a wire may APPROACH a point on a host wire: perpendicular to it. */
-export function tapApproachSides(hostPts: readonly Point[], junction: Point): PinSide[] {
-  return segmentAxisAt(hostPts, junction) === "h" ? ["up", "down"] : ["left", "right"];
-}
-
-/**
- * Every lattice point ON a polyline, in path order, excluding `insetCells` cells at each end.
- *
- * This is the candidate set for a tap junction: a junction must lie on the host wire, and it
- * must sit on the routing lattice or the stub geometry would be off-grid.
- */
-export function polylineLatticePoints(pts: readonly Point[], insetCells = TAP_ENDPOINT_INSET): Point[] {
-  const cs = cellSize();
-  const out: Point[] = [];
-  const seen = new Set<string>();
-  // Total number of cells along the path, so `insetCells` can be applied from both ends.
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    total += Math.abs(Math.round((pts[i].x - pts[i - 1].x) / cs)) + Math.abs(Math.round((pts[i].y - pts[i - 1].y) / cs));
-  }
-  if (total <= insetCells * 2) return [];
-  let walked = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    const ax = Math.round(a.x / cs);
-    const ay = Math.round(a.y / cs);
-    const bx = Math.round(b.x / cs);
-    const by = Math.round(b.y / cs);
-    const sx = Math.sign(bx - ax);
-    const sy = Math.sign(by - ay);
-    let cx = ax;
-    let cy = ay;
-    while (cx !== bx || cy !== by) {
-      const inRange = walked >= insetCells && walked < total - insetCells;
-      if (inRange) {
-        const key = `${cx},${cy}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push({ x: cx * cs, y: cy * cs });
-        }
-      }
-      cx += sx;
-      cy += sy;
-      walked++;
-    }
-  }
-  return out;
-}
-
-/**
- * Snap an arbitrary stored tap point onto the host polyline (nearest lattice point on it).
- *
- * Taps are stored as absolute coordinates so a saved file reproduces exactly. When the host
- * wire is later re-routed its polyline changes, and this projection is what keeps the
- * junction ON the host instead of leaving it floating where the wire used to be.
- */
-export function projectTapOntoHost(hostPts: readonly Point[], p: Point): Point | null {
-  const cands = polylineLatticePoints(hostPts, TAP_ENDPOINT_INSET);
-  if (cands.length === 0) return null;
-  let best = cands[0];
-  let bestD = Math.abs(best.x - p.x) + Math.abs(best.y - p.y);
-  for (const c of cands) {
-    const d = Math.abs(c.x - p.x) + Math.abs(c.y - p.y);
-    if (d < bestD) {
-      best = c;
-      bestD = d;
-    }
-  }
-  return best;
 }
 
 /** Obstacle rects (world px) for every component, minus the excluded ids, grown by `padPx`. */
@@ -272,10 +179,11 @@ export function crossedObstacles(
   const padPx = opts.padPx ?? OBSTACLE_PAD;
   const hits: { componentId: string; segmentIndex: number }[] = [];
   const last = waypoints.length - 1;
-  // Only a PIN endpoint owns a component whose pad band the stub may legitimately occupy.
-  // A tap endpoint owns no component (it sits on a wire), so it exempts nothing.
-  const fromComp = isPinEndpoint(edge.from) ? edge.from.componentId : null;
-  const toComp = isPinEndpoint(edge.to) ? edge.to.componentId : null;
+  // A wire legitimately occupies the pad band of the two components it connects — its pin
+  // stubs live there — so the first and last segments are exempt from their own components.
+  // The exemption is SEGMENT-SCOPED, so a wire that doubles back over its own body is caught.
+  const fromComp = edge.from.componentId;
+  const toComp = edge.to.componentId;
   for (const c of doc.components) {
     const r = obstacleRect(c, padPx);
     const rect: RouteRect = { left: r.left, top: r.top, right: r.right, bottom: r.bottom, nodeId: c.id };
@@ -539,104 +447,47 @@ function tryAttempt(inp: AttemptInput): Point[] | null {
 }
 
 /**
- * Resolve one edge endpoint into everything the router needs: where the wire anchors, which
- * way it leaves that anchor, which component (if any) owns the anchor, and whether the
- * anchor is a tap on another wire.
- *
- * A pin anchor is fixed by the part. A TAP anchor is projected onto its host wire's CURRENT
- * polyline, so the junction stays on the wire even after the host is re-routed — the stored
- * coordinates are a starting hint, never a floating point in space.
+ * Resolve one edge endpoint into what the router needs: where the wire anchors and which way
+ * it leaves that anchor.
  */
 interface ResolvedAnchor {
   pos: Point;
   side: PinSide;
-  /** Component that owns the anchor, or null for a tap. */
-  componentId: string | null;
-  /** Host edge id when this anchor is a tap. */
-  tapOfEdgeId: string | null;
-  /** Every perpendicular side to try; a pin has exactly one legal facing. */
-  altSides?: PinSide[];
+  componentId: string;
 }
 
-function resolveAnchor(
-  doc: RlcDoc,
-  end: RlcEdgeEndpoint,
-  geometry: Record<string, RlcWireGeometry> | undefined,
-  selfEdgeId: string,
-): ResolvedAnchor | null {
-  if (isPinEndpoint(end)) {
-    const g = endpointGeometry(doc, end.componentId, end.pinId);
-    if (!g) return null;
-    return { pos: g.pos, side: g.side, componentId: g.componentId, tapOfEdgeId: null };
-  }
-  if (end.edgeId === selfEdgeId) return null;
-  const hostPts = geometry?.[end.edgeId]?.waypoints;
-  if (!hostPts || hostPts.length < 2) return null;
-  const junction = projectTapOntoHost(hostPts, { x: end.x, y: end.y });
-  if (!junction) return null;
-  // The first perpendicular side is only a DEFAULT. `routeOneWire` tries every perpendicular
-  // side and keeps the best, so the choice is made on measured length, not on ordering.
-  const sides = tapApproachSides(hostPts, junction);
-  return { pos: junction, side: sides[0], componentId: null, tapOfEdgeId: end.edgeId, altSides: sides };
+function resolveAnchor(doc: RlcDoc, end: RlcEdgeEndpoint): ResolvedAnchor | null {
+  const g = endpointGeometry(doc, end.componentId, end.pinId);
+  if (!g) return null;
+  return { pos: g.pos, side: g.side, componentId: g.componentId };
 }
 
 /**
- * Route one wire, honouring a tap anchor when present.
+ * Route one wire across the wires already placed in this pass.
  *
- * `penalties` carries the zones of wires already routed this pass ("avoid other wires").
- * `geometry` is the solved polyline of every wire so far, which a tap anchor needs in order
- * to project itself onto its host. Both are supplied by `routeDocument`; callers routing a
- * single wire may omit them, in which case a tap anchor cannot be resolved and the wire is
- * reported as unroutable rather than silently guessed.
+ * `penalties` carries the soft-cost zones of the wires routed before it (the "avoid other
+ * wires" half of obstacle avoidance). The pass order is deterministic, so the geometry is
+ * reproducible.
  */
 export function routeOneWire(
   doc: RlcDoc,
   edge: RlcEdge,
   penalties: PenaltyZone[] = [],
-  geometry?: Record<string, RlcWireGeometry>,
+  _geometry?: Record<string, RlcWireGeometry>,
   opts: { approachOverride?: PinSide } = {},
 ): RlcRoutedWire | null {
-  const from = resolveAnchor(doc, edge.from, geometry, edge.id);
-  const to = resolveAnchor(doc, edge.to, geometry, edge.id);
+  const from = resolveAnchor(doc, edge.from);
+  const to = resolveAnchor(doc, edge.to);
   if (!from || !to) return null;
 
-  // A tap has TWO legal ways in (either perpendicular side of the host segment). A pin has
-  // exactly one (its facing). Both the preview and the commit go through this same loop, so
-  // the branch you see while hovering IS the branch that gets stored — no second opinion.
-  const sides: PinSide[] = opts.approachOverride
-    ? [opts.approachOverride]
-    : to.altSides && to.altSides.length > 0
-      ? to.altSides
-      : [to.side];
+  // `approachOverride` is retained for callers that want to force the target's arrival side;
+  // a pin's facing is the only legal one in normal use.
+  const toSide = opts.approachOverride ?? to.side;
 
-  let best: RlcRoutedWire | null = null;
-  let bestLength = Infinity;
-  for (const side of sides) {
-    const routed = routeWithApproach(doc, edge, from, to, side, penalties);
-    if (!routed) continue;
-    const len = polylineLength(routed.waypoints);
-    // Ties break on the side order, which is itself deterministic — so the result is stable.
-    if (len < bestLength) {
-      best = routed;
-      bestLength = len;
-    }
-  }
-  return best;
-}
-
-/** One routing attempt with the target arriving from a specific side. */
-function routeWithApproach(
-  doc: RlcDoc,
-  edge: RlcEdge,
-  from: ResolvedAnchor,
-  to: ResolvedAnchor,
-  toSide: PinSide,
-  penalties: PenaltyZone[],
-): RlcRoutedWire | null {
   const cs = cellSize();
   const startDir = SIDE_TO_DIR[from.side];
-  // A wire ARRIVES travelling opposite to the anchor's outward facing (a left-side anchor is
-  // entered from its left, moving rightward).
+  // A wire ARRIVES travelling opposite to the pin's outward facing (a left-side pin is entered
+  // from its left, moving rightward).
   const endDir = OPPOSITE_DIR[SIDE_TO_DIR[toSide]];
 
   const s1: Point = { x: from.pos.x + SIDE_TO_VEC[from.side].x * cs, y: from.pos.y + SIDE_TO_VEC[from.side].y * cs };
@@ -657,10 +508,7 @@ function routeWithApproach(
   };
   const endpoints = [s1, cs1, e1, ce1];
 
-  // A tap anchor sits ON another wire, so that wire must not be treated as an obstacle for
-  // this one — otherwise every tap would be reported as blocked by its own host.
-  const excludeHostIds = [from.tapOfEdgeId, to.tapOfEdgeId].filter((v): v is string => !!v);
-  const ownIds = [from.componentId, to.componentId].filter((v): v is string => !!v);
+  const ownIds = [from.componentId, to.componentId];
   const ownOnly = rlcObstacles(doc, [], OBSTACLE_PAD).filter((r) => r.nodeId && ownIds.includes(r.nodeId));
 
   // Strictest first. Each attempt must pass its own measurement before being accepted:
@@ -678,13 +526,9 @@ function routeWithApproach(
   ];
 
   for (const attempt of attempts) {
-    // A tap's host wire must not block the tap itself.
-    const rects = excludeHostIds.length === 0
-      ? attempt.rects
-      : attempt.rects.filter((r) => !excludeHostIds.some((h) => r.nodeId === h));
     const pts = tryAttempt({
       ...base,
-      grid: gridFor(rects, endpoints),
+      grid: gridFor(attempt.rects, endpoints),
       penalties: penalties.length > 0 ? penalties : undefined,
     });
     if (!pts) continue;
@@ -806,134 +650,4 @@ export function routeDocument(doc: RlcDoc, opts: { avoidWires?: boolean } = {}):
   }
 
   return { wires, degradedCount };
-}
-
-// ── Tap solver: the OARSMT incremental-growth step ──────────────────────────
-
-export interface RlcTapSolution {
-  /** Junction on the host wire, on the routing lattice. */
-  junction: Point;
-  /** Solved polyline of the new branch, from the source pin to `junction`. */
-  waypoints: Point[];
-  svgPath: string;
-  quality: RlcWireQuality;
-  degraded: boolean;
-  turns: number;
-  /** Manhattan length of the branch — the value the search minimises. */
-  length: number;
-  /** Candidate junctions actually evaluated (for honest reporting of the bound). */
-  evaluated: number;
-  /** True when the search stopped early because no remaining candidate could improve. */
-  optimal: boolean;
-}
-
-/** Manhattan length of a polyline. */
-export function polylineLength(pts: readonly Point[]): number {
-  let n = 0;
-  for (let i = 1; i < pts.length; i++) n += Math.abs(pts[i].x - pts[i - 1].x) + Math.abs(pts[i].y - pts[i - 1].y);
-  return n;
-}
-
-/**
- * Penalty zones for every wire in a geometry map, in numeric id order.
- *
- * This is what `routeDocument` accumulates as it routes. Exposing it lets the tap solver feed
- * a new branch the SAME soft costs the committed route will see, which is what makes the
- * previewed branch identical to the branch that gets stored — the preview is a real solve, not
- * an approximation.
- */
-export function penaltiesForGeometry(
-  doc: RlcDoc,
-  geometry: Record<string, RlcWireGeometry> | undefined,
-): PenaltyZone[] {
-  if (!geometry) return [];
-  const out: PenaltyZone[] = [];
-  const ordered = [...doc.edges].sort(compareRouteOrder);
-  for (const e of ordered) {
-    const g = geometry[e.id];
-    if (!g || !Array.isArray(g.waypoints) || g.waypoints.length < 2) continue;
-    out.push(...wirePenalties({ edgeId: e.id, waypoints: g.waypoints } as RlcRoutedWire));
-  }
-  return out;
-}
-
-/**
- * Solve the BEST junction for a new branch from `source` onto `hostEdgeId`.
- *
- * This is the incremental-growth step of an obstacle-avoiding rectilinear Steiner tree
- * (OARSMT): an existing tree, one unconnected terminal, and the point where the new branch
- * meets the tree is the Steiner point being added. The objective is the length of the NEW
- * branch only — optimising the total tree length would require moving existing wires, which
- * this editor guarantees never happens.
- *
- * Optimality argument, not just a search: candidates are visited in increasing Manhattan
- * distance from the source, and Manhattan distance is a LOWER BOUND on the length of any
- * obstacle-avoiding rectilinear path between those two points. So once the best solved
- * branch is no longer than the next candidate's lower bound, no remaining candidate can beat
- * it and the search stops — the result is optimal over the candidate set. `optimal` reports
- * whether that argument actually fired (a budget-bounded search reports false, honestly).
- *
- * Obstacles and the four-tier attempt ladder are the SAME ones `routeOneWire` uses, so a tap
- * branch is held to exactly the avoidance contract a normal wire is.
- */
-export function solveTap(
-  doc: RlcDoc,
-  source: RlcPinEndpoint,
-  hostEdgeId: string,
-  opts: { baseGeometry?: Record<string, RlcWireGeometry> } = {},
-): RlcTapSolution | null {
-  const src = endpointGeometry(doc, source.componentId, source.pinId);
-  if (!src) return null;
-  const hostPts = opts.baseGeometry?.[hostEdgeId]?.waypoints;
-  if (!hostPts || hostPts.length < 2) return null;
-
-  const candidates = polylineLatticePoints(hostPts, TAP_ENDPOINT_INSET);
-  if (candidates.length === 0) return null;
-  const ranked = candidates
-    .map((c) => ({ c, d: Math.abs(c.x - src.pos.x) + Math.abs(c.y - src.pos.y) }))
-    .sort((a, b) => (a.d !== b.d ? a.d - b.d : a.c.x !== b.c.x ? a.c.x - b.c.x : a.c.y - b.c.y));
-
-  // The new branch is always routed LAST (its id is the largest), so every existing wire is
-  // already placed by the time it routes. Feeding those soft costs to the probe is what makes
-  // the previewed branch the same branch the commit will store.
-  const penalties = penaltiesForGeometry(doc, opts.baseGeometry);
-
-  let best: RlcTapSolution | null = null;
-  let evaluated = 0;
-  let optimal = false;
-
-  for (const { c, d } of ranked) {
-    if (best && best.length <= d) {
-      // No unseen candidate can be closer than d, and the best branch is already <= d.
-      optimal = true;
-      break;
-    }
-    if (evaluated >= TAP_MAX_CANDIDATES) break;
-    evaluated++;
-
-    // `routeOneWire` itself tries every perpendicular approach for a tap and keeps the
-    // shorter, so one call per candidate is enough — and it is the same call the commit makes.
-    const probe: RlcEdge = { id: "__probe__", from: source, to: { kind: "tap", edgeId: hostEdgeId, x: c.x, y: c.y } };
-    const routed = routeOneWire(doc, probe, penalties, opts.baseGeometry);
-    if (!routed) continue;
-    const length = polylineLength(routed.waypoints);
-    if (!best || length < best.length) {
-      best = {
-        junction: c,
-        waypoints: routed.waypoints,
-        svgPath: routed.svgPath,
-        quality: routed.quality,
-        degraded: routed.degraded,
-        turns: routed.turns,
-        length,
-        evaluated: 0,
-        optimal: false,
-      };
-    }
-  }
-
-  if (!best) return null;
-  best.evaluated = evaluated;
-  best.optimal = optimal;
-  return best;
 }

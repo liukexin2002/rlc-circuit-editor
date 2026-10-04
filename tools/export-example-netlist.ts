@@ -15,7 +15,6 @@ import {
   emptyRlcDoc,
   makeComponent,
   pinKey,
-  pinPos,
   type RlcDoc,
   type RlcKind,
   type RlcRotation,
@@ -48,7 +47,9 @@ const l2 = place(doc, "inductor", 640, 320, 0, "8.893nH");
 const portOut = place(doc, "resistor", 1280, 320, 0, "50");
 portOut.label = "ROUT";
 
-// Shunt capacitors (rotated 90° so they hang vertically) tapped onto the main line.
+// Shunt capacitors (rotated 90° so they hang vertically) wired to the line at their own
+// nodes, then joined to ground. Each capacitor is wired to the same node as the inductor's
+// output, which is what makes them shunt elements.
 const c1 = place(doc, "capacitor", 480, 720, 90, "3.222pF");
 const c2 = place(doc, "capacitor", 960, 720, 90, "82.25pF");
 
@@ -56,43 +57,19 @@ const c2 = place(doc, "capacitor", 960, 720, 90, "82.25pF");
 const connect = (a: { id: string }, aPin: "p0" | "p1", b: { id: string }, bPin: "p0" | "p1") => {
   doc.edges.push({
     id: `e${doc.nextEdgeSeq++}`,
-    from: { kind: "pin", componentId: a.id, pinId: aPin },
-    to: { kind: "pin", componentId: b.id, pinId: bPin },
+    from: { componentId: a.id, pinId: aPin },
+    to: { componentId: b.id, pinId: bPin },
   });
 };
 
 connect(portIn, "p1", l2, "p0");
 connect(l2, "p1", portOut, "p0");
 
-// Route once so the trunk exists, then TAP the shunt caps onto it. This is the v2 feature:
-// the junction is solved on the trunk, so the capacitor's stub is as short as geometry allows.
-const firstPass = routeDocument(doc);
-const trunkIds = doc.edges.map((e) => e.id);
-let trunk = trunkIds[0];
-for (const id of trunkIds) {
-  if (firstPass.wires[id] && firstPass.wires[id].waypoints.length >= 2) {
-    const pts = firstPass.wires[id].waypoints;
-    const span = Math.abs(pts[pts.length - 1].x - pts[0].x);
-    if (span > 600) trunk = id; // the long horizontal run between the two ends
-  }
-}
-void trunk;
-
-// Tap each capacitor's upper pin (p0 when rotated 90° points left; use p1 which points up).
-const trunkPts = firstPass.wires[doc.edges[1].id].waypoints;
-doc.edges.push({
-  id: `e${doc.nextEdgeSeq++}`,
-  from: { kind: "pin", componentId: c1.id, pinId: "p0" },
-  to: { kind: "tap", edgeId: doc.edges[1].id, x: pinPos(c1, "p0").x, y: trunkPts[0].y },
-});
-doc.edges.push({
-  id: `e${doc.nextEdgeSeq++}`,
-  from: { kind: "pin", componentId: c2.id, pinId: "p0" },
-  to: { kind: "tap", edgeId: doc.edges[1].id, x: pinPos(c2, "p0").x, y: trunkPts[0].y },
-});
-
-// Ground the lower ends of both capacitors by wiring them to each other and declaring the node
-// as ground (one ground symbol is enough for both, and scikit-rf accepts a shared Ground).
+// The shunt branch: both capacitors join the line at the inductor's output node, and their
+// lower pins are tied together and grounded. Wiring the capacitors to `portOut.p0` (the same
+// pin `l2.p1` lands on) puts them on the line's output node without needing a mid-wire tap.
+connect(l2, "p1", c1, "p0");
+connect(l2, "p1", c2, "p0");
 connect(c1, "p1", c2, "p1");
 
 // Declarations: the two ends are ports, the capacitor bottoms are ground.

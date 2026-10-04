@@ -5,12 +5,11 @@
  * truth, and a second copy could disagree with it. Everything here is a pure function, so the
  * netlist can be asserted in Node without a store or a DOM.
  *
- * ── Why this matters for the tap feature ─────────────────────────────────────
- * A tap is a wire endpoint sitting on ANOTHER wire. Electrically that means the new pin is on
- * the same node as everything the host wire already connects. If the netlist ignored taps,
- * connecting a part to the middle of a wire would look correct on screen and then export a
- * circuit where that part is not connected to anything. So a tap endpoint unions the new wire
- * with its HOST wire, and the "same net" check below is what refuses a redundant connection.
+ * ── Why the derivation is a union-find ─────────────────────────────────────
+ * A node is a set of pins that are electrically tied together, and a wire ties its two ends
+ * together. So every wire is unioned with the two pins it lands on, and the resulting
+ * components ARE the nets. A pin reached by several wires is still one terminal of its node,
+ * because scikit-rf rejects a `(network, port)` pair that appears twice.
  *
  * ── scikit-rf shape ─────────────────────────────────────────────────────────
  * The exported `connections` is the structure scikit-rf's Circuit takes: a List of List of
@@ -20,7 +19,6 @@
  */
 
 import {
-  isPinEndpoint,
   pinKey,
   type RlcDoc,
   type RlcEdge,
@@ -172,8 +170,6 @@ export interface RlcNet {
   terminals: RlcNetTerminal[];
   /** Wire ids in this net, in numeric id order. */
   wires: string[];
-  /** Taps in this net: [wireId, hostWireId] pairs. */
-  taps: { wireId: string; hostWireId: string }[];
   /** Manhattan length of every wire in the net, in world px. */
   length: number;
   /** True when the net has exactly one terminal (an unterminated stub). */
@@ -204,41 +200,36 @@ function edgeLength(doc: RlcDoc, e: RlcEdge): number {
   return n;
 }
 
-/** The element a wire endpoint attaches to: a pin, or the wire it taps. */
-function elementOf(end: RlcEdgeEndpoint): { elem: string; tap: { wireId: string; hostEdgeId: string } | null } {
-  if (isPinEndpoint(end)) {
-    return { elem: pinElem(end.componentId, end.pinId), tap: null };
-  }
-  return { elem: wireElem(end.edgeId), tap: { wireId: "", hostEdgeId: end.edgeId } };
+/** The element a wire endpoint attaches to: the pin it lands on. */
+function elementOf(end: RlcEdgeEndpoint): string {
+  return pinElem(end.componentId, end.pinId);
 }
 
 /**
  * Derive the netlist of a document.
  *
- * Every wire is unioned with whatever each of its ends attaches to — a pin element, or the
- * HOST WIRE element when the end is a tap. That single rule is what makes a tap join nets
- * rather than create a floating node.
+ * Every wire is unioned with the two PINS its ends land on, so two wires that share a pin are
+ * on one node. A pin reached by more than one wire stays a single terminal of that node — a
+ * duplicate `(network, port)` pair is rejected outright by scikit-rf.
  */
 export function deriveNetlist(doc: RlcDoc): RlcNetlist {
   const dsu = new DSU();
-  const taps: { wireId: string; hostWireId: string }[] = [];
 
   for (const e of doc.edges) {
     dsu.find(wireElem(e.id)); // ensure the wire exists as an element even if isolated
     for (const end of [e.from, e.to]) {
-      const { elem, tap } = elementOf(end);
+      const elem = elementOf(end);
       dsu.find(elem);
       dsu.union(wireElem(e.id), elem);
-      if (tap) taps.push({ wireId: e.id, hostWireId: tap.hostEdgeId });
     }
   }
 
   // Group elements by root.
-  const byRoot = new Map<string, { pins: RlcNetTerminal[]; wires: string[]; taps: typeof taps }>();
+  const byRoot = new Map<string, { pins: RlcNetTerminal[]; wires: string[] }>();
   const bucket = (root: string) => {
     let b = byRoot.get(root);
     if (!b) {
-      b = { pins: [], wires: [], taps: [] };
+      b = { pins: [], wires: [] };
       byRoot.set(root, b);
     }
     return b;
@@ -250,10 +241,6 @@ export function deriveNetlist(doc: RlcDoc): RlcNetlist {
     const b = bucket(dsu.find(wireElem(e.id)));
     b.wires.push(e.id);
     for (const end of [e.from, e.to]) {
-      if (!isPinEndpoint(end)) continue;
-      // A pin can be reached by more than one wire. It is still ONE terminal of the node, and
-      // listing it twice would emit a duplicate (network, port) pair, which scikit-rf rejects
-      // outright — so dedupe here, where the node's membership is decided.
       const key = pinKey(end.componentId, end.pinId);
       if (seenTerminal.has(key)) continue;
       seenTerminal.add(key);
@@ -266,7 +253,6 @@ export function deriveNetlist(doc: RlcDoc): RlcNetlist {
       });
     }
   }
-  for (const t of taps) bucket(dsu.find(wireElem(t.wireId))).taps.push(t);
 
   // Deterministic ordering: nets are numbered by their smallest wire id (numeric), so adding
   // an unrelated net never renumbers the existing ones.
@@ -288,7 +274,6 @@ export function deriveNetlist(doc: RlcDoc): RlcNetlist {
       name,
       terminals: pins,
       wires,
-      taps: b.taps.slice().sort((x, y) => compareEdgeIds(x.wireId, y.wireId)),
       length: wires.reduce((n, id) => n + edgeLength(doc, doc.edges.find((e) => e.id === id)!), 0),
       dangling: pins.length === 1,
       isTree: wires.length === pins.length - 1,
@@ -306,7 +291,6 @@ export function deriveNetlist(doc: RlcDoc): RlcNetlist {
         name,
         terminals: [{ key, componentId: c.id, componentName: c.label, pinId }],
         wires: [],
-        taps: [],
         length: 0,
         dangling: true,
         isTree: true,
@@ -384,16 +368,8 @@ export interface SkrfNetworkEntry {
 }
 
 export interface SkrfEdgeEnd {
-  kind: "pin";
   componentId: string;
   pinId: "p0" | "p1";
-}
-
-export interface SkrfWireEnd {
-  kind: "tap";
-  edgeId: string;
-  x: number;
-  y: number;
 }
 
 export interface SkrfSchematic {
@@ -408,8 +384,8 @@ export interface SkrfSchematic {
   }[];
   wires: {
     id: string;
-    from: SkrfEdgeEnd | SkrfWireEnd;
-    to: SkrfEdgeEnd | SkrfWireEnd;
+    from: SkrfEdgeEnd;
+    to: SkrfEdgeEnd;
     /** Stored polyline — what makes reopening this file render EXACTLY the saved drawing. */
     waypoints: { x: number; y: number }[];
     quality: string;
@@ -431,7 +407,6 @@ export interface SkrfNetlist {
     name: string;
     terminals: string[];
     wires: string[];
-    taps: { wireId: string; hostWireId: string }[];
     length: number;
   }[];
   notes: string[];
@@ -550,12 +525,8 @@ export function buildSkrfNetlist(
     })),
     wires: doc.edges.map((e) => ({
       id: e.id,
-      from: isPinEndpoint(e.from)
-        ? { kind: "pin" as const, componentId: e.from.componentId, pinId: e.from.pinId }
-        : { kind: "tap" as const, edgeId: e.from.edgeId, x: e.from.x, y: e.from.y },
-      to: isPinEndpoint(e.to)
-        ? { kind: "pin" as const, componentId: e.to.componentId, pinId: e.to.pinId }
-        : { kind: "tap" as const, edgeId: e.to.edgeId, x: e.to.x, y: e.to.y },
+      from: { componentId: e.from.componentId, pinId: e.from.pinId },
+      to: { componentId: e.to.componentId, pinId: e.to.pinId },
       waypoints: (doc.geometry[e.id]?.waypoints ?? []).map((p) => ({ x: p.x, y: p.y })),
       quality: doc.geometry[e.id]?.quality ?? "unknown",
     })),
@@ -575,7 +546,6 @@ export function buildSkrfNetlist(
       name: n.name,
       terminals: n.terminals.map((t) => t.key),
       wires: n.wires,
-      taps: n.taps,
       length: n.length,
     })),
     notes,
@@ -612,11 +582,10 @@ export function formatNetlistText(netlist: SkrfNetlist): string {
   }
   lines.push("]");
   lines.push("");
-  lines.push("# 网络（含连接点）");
+  lines.push("# 网络");
   for (const n of netlist.nets) {
-    const tapText = n.taps.length ? `，连接点: ${n.taps.map((t) => `${t.wireId}→${t.hostWireId}`).join(", ")}` : "";
     const lenText = n.length ? `，长度 ${n.length}px` : "";
-    lines.push(`#   ${n.name.padEnd(5)} 端子 [${n.terminals.join(", ")}]  连线 [${n.wires.join(", ")}]${tapText}${lenText}`);
+    lines.push(`#   ${n.name.padEnd(5)} 端子 [${n.terminals.join(", ")}]  连线 [${n.wires.join(", ")}]${lenText}`);
   }
   if (netlist.notes.length) {
     lines.push("");

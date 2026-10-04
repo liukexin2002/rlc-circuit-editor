@@ -25,11 +25,11 @@ import {
   isOrthogonalPolyline,
   parallelOverlapCells,
   routeDocument,
+  routeOrderKey,
   segmentIntersectsRect,
 } from "../../rlc/rlcRouting";
 import {
   emptyRlcDoc,
-  isPinEndpoint,
   makeComponent,
   obstacleRect,
   pinPos,
@@ -61,8 +61,8 @@ function connect(
 ): RlcEdge {
   const edge: RlcEdge = {
     id: `e${doc.nextEdgeSeq}`,
-    from: { kind: "pin", componentId: a.id, pinId: aPin },
-    to: { kind: "pin", componentId: b.id, pinId: bPin },
+    from: { componentId: a.id, pinId: aPin },
+    to: { componentId: b.id, pinId: bPin },
   };
   doc.nextEdgeSeq++;
   doc.edges.push(edge);
@@ -80,9 +80,6 @@ function expectWireRules(doc: RlcDoc, edge: RlcEdge, waypoints: { x: number; y: 
   // R2 + R4: both ends anchored on the true pins and leaving along the pin facing.
   const fromEnd = edge.from;
   const toEnd = edge.to;
-  if (!isPinEndpoint(fromEnd) || !isPinEndpoint(toEnd)) {
-    throw new Error("expectWireRules is for pin-to-pin wires");
-  }
   const from = doc.components.find((c) => c.id === fromEnd.componentId)!;
   const to = doc.components.find((c) => c.id === toEnd.componentId)!;
   expect(waypoints[0]).toEqual(pinPos(from, fromEnd.pinId));
@@ -400,6 +397,72 @@ describe("RLC routing — quality tiers are honest about what was achieved", () 
 });
 
 // ── Scenario F: determinism, edits and density ──────────────────────────────
+
+describe("RLC routing — adding a wire never moves an existing wire", () => {
+  /** Ten wires in a row, so ids reach two digits. */
+  const buildMany = (count: number) => {
+    const doc = emptyRlcDoc();
+    const parts: RlcComponent[] = [];
+    for (let i = 0; i <= count; i++) {
+      parts.push(place(doc, "resistor", 160 + (i % 2) * 900, 160 + i * 96));
+    }
+    const edges: RlcEdge[] = [];
+    for (let i = 0; i < count; i++) edges.push(connect(doc, parts[i], "p1", parts[i + 1], "p0"));
+    return { doc, edges, parts };
+  };
+
+  it("routes by NUMERIC id order, not string order", () => {
+    // These ids sort the other way round as strings, which is exactly the bug this guards:
+    // with string ordering the tenth wire would be routed before the ninth.
+    expect(["e9", "e10", "e2"].sort()).toEqual(["e10", "e2", "e9"]);
+    expect(["e9", "e10", "e2"].sort((a, b) => routeOrderKey(a)[0] - routeOrderKey(b)[0])).toEqual([
+      "e2",
+      "e9",
+      "e10",
+    ]);
+  });
+
+  it("leaves every earlier wire bit-for-bit identical when a new wire is added", () => {
+    const { doc, edges, parts } = buildMany(12);
+    const before = routeDocument(doc);
+    const snapshot = new Map(edges.map((e) => [e.id, JSON.stringify(before.wires[e.id].waypoints)]));
+    expect(snapshot.size).toBe(12);
+
+    // A new wire gets the largest id, so it is routed LAST and cannot influence the others.
+    const extra = place(doc, "capacitor", 1400, 700, 90);
+    const added = connect(doc, parts[0], "p0", extra, "p0");
+    expect(routeOrderKey(added.id)[0]).toBeGreaterThan(routeOrderKey("e12")[0]);
+
+    const after = routeDocument(doc);
+    for (const e of edges) {
+      expect(
+        JSON.stringify(after.wires[e.id].waypoints),
+        `wire ${e.id} must be unchanged after adding ${added.id}`,
+      ).toBe(snapshot.get(e.id));
+    }
+  });
+
+  it("holds even when the new wire lands in a crowded corridor", () => {
+    // Pack the parts so the new wire MUST negotiate with the existing ones. If ordering were
+    // wrong, its penalty zones could push an existing wire onto a different path.
+    const doc = emptyRlcDoc();
+    const parts: RlcComponent[] = [];
+    for (let i = 0; i < 6; i++) parts.push(place(doc, "resistor", 320, 200 + i * 5 * GRID));
+    const edges: RlcEdge[] = [];
+    for (let i = 0; i < 5; i++) edges.push(connect(doc, parts[i], "p1", parts[i + 1], "p1"));
+    const before = routeDocument(doc);
+    const snapshot = new Map(edges.map((e) => [e.id, JSON.stringify(before.wires[e.id].waypoints)]));
+
+    const extra = place(doc, "capacitor", 700, 400, 90);
+    connect(doc, parts[5], "p0", extra, "p0");
+    const after = routeDocument(doc);
+    for (const e of edges) {
+      expect(JSON.stringify(after.wires[e.id].waypoints), `wire ${e.id} must not move`).toBe(
+        snapshot.get(e.id),
+      );
+    }
+  });
+});
 
 describe("RLC routing — scenario F: determinism and re-routing", () => {
   const build = () => {

@@ -47,26 +47,8 @@ function wire(
 ): RlcEdge {
   const edge: RlcEdge = {
     id: `e${doc.nextEdgeSeq}`,
-    from: { kind: "pin", componentId: a.id, pinId: aPin },
-    to: { kind: "pin", componentId: b.id, pinId: bPin },
-  };
-  doc.nextEdgeSeq++;
-  doc.edges.push(edge);
-  return edge;
-}
-
-function tapWire(
-  doc: RlcDoc,
-  a: RlcComponent,
-  aPin: "p0" | "p1",
-  hostEdgeId: string,
-  x: number,
-  y: number,
-): RlcEdge {
-  const edge: RlcEdge = {
-    id: `e${doc.nextEdgeSeq}`,
-    from: { kind: "pin", componentId: a.id, pinId: aPin },
-    to: { kind: "tap", edgeId: hostEdgeId, x, y },
+    from: { componentId: a.id, pinId: aPin },
+    to: { componentId: b.id, pinId: bPin },
   };
   doc.nextEdgeSeq++;
   doc.edges.push(edge);
@@ -279,13 +261,13 @@ describe("netlist — the exported structure satisfies scikit-rf's rules", () =>
 // ── The drawing travels with the netlist ───────────────────────────────────
 
 describe("netlist — the export carries the drawing so a reimport can redraw it exactly", () => {
-  it("includes schematic components, taps and stored waypoints", () => {
+  it("includes schematic components and stored waypoints", () => {
     const doc = emptyRlcDoc();
     const r1 = place(doc, "resistor", 160, 160);
     const c1 = place(doc, "capacitor", 1200, 160);
     const host = wire(doc, r1, "p1", c1, "p0");
     const t = place(doc, "inductor", 480, 700, 270);
-    const branch = tapWire(doc, t, "p1", host.id, 480, 160);
+    const branch = wire(doc, t, "p1", c1, "p1");
 
     const geometry = {
       [host.id]: { waypoints: [{ x: 192, y: 160 }, { x: 1152, y: 160 }], quality: "clean" },
@@ -302,13 +284,9 @@ describe("netlist — the export carries the drawing so a reimport can redraw it
     expect(hostOut.waypoints).toEqual(geometry[host.id].waypoints);
     const branchOut = netlist.schematic.wires.find((w) => w.id === branch.id)!;
     expect(branchOut.waypoints).toEqual(geometry[branch.id].waypoints);
-    // The tap endpoint survives, so the junction can be re-projected on reload.
-    expect(branchOut.to.kind).toBe("tap");
-    if (branchOut.to.kind === "tap") {
-      expect(branchOut.to.edgeId).toBe(host.id);
-      expect(branchOut.to.x).toBe(480);
-      expect(branchOut.to.y).toBe(160);
-    }
+    // Endpoints are recorded as the pins they land on, so a reimport can restore the wiring.
+    expect(branchOut.from).toEqual({ componentId: t.id, pinId: "p1" });
+    expect(branchOut.to).toEqual({ componentId: c1.id, pinId: "p1" });
     // Round-tripping the netlist through JSON loses nothing.
     const again = JSON.parse(JSON.stringify(netlist));
     expect(again.schematic.wires).toEqual(netlist.schematic.wires);
@@ -322,17 +300,15 @@ describe("netlist — the export carries the drawing so a reimport can redraw it
     expect(netlist.generator.version).toBeTruthy();
   });
 
-  it("renders a human-readable text form that lists nets and taps", () => {
+  it("renders a human-readable text form that lists nets", () => {
     const doc = emptyRlcDoc();
     const r1 = place(doc, "resistor", 160, 160);
     const c1 = place(doc, "capacitor", 1200, 160);
-    const host = wire(doc, r1, "p1", c1, "p0");
-    const t = place(doc, "inductor", 480, 700, 270);
-    tapWire(doc, t, "p1", host.id, 480, 160);
+    wire(doc, r1, "p1", c1, "p0");
     const { netlist } = buildSkrfNetlist(doc);
     const text = formatNetlistText(netlist);
     expect(text).toContain("connections = [");
-    expect(text).toContain("连接点");
+    expect(text).toContain("# 网络");
     expect(text).toContain("R1");
   });
 });

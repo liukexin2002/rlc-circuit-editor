@@ -12,7 +12,6 @@ import { useRlcStore } from "./rlcStore";
 import {
   KIND_DEFAULT_VALUE,
   KIND_LABEL,
-  isPinEndpoint,
   type RlcEdgeEndpoint,
   type RlcKind,
   type RlcRotation,
@@ -22,10 +21,9 @@ import { deriveNetlist } from "./rlcNetlist";
 import { EDITOR_VERSION, GRID } from "./rlcConstants";
 import "./rlcEditorStyles.css";
 
-/** Readable description of a wire end, whether it is a pin or a junction on another wire. */
+/** Readable description of a wire end. */
 function describeEndpoint(e: RlcEdgeEndpoint): string {
-  if (isPinEndpoint(e)) return `${e.componentId} / ${e.pinId}`;
-  return `连线 ${e.edgeId} 上 (${e.x}, ${e.y})`;
+  return `${e.componentId} / ${e.pinId}`;
 }
 
 /** What to say about how the current geometry was obtained. */
@@ -87,14 +85,6 @@ export function RlcEditorApp() {
   // selector that returned a FRESH object every render would loop React forever.
   const netlist = useMemo(() => deriveNetlist(doc), [doc]);
   const [freq, setFreq] = useState({ start: 1, stop: 10, npoints: 1001, unit: "GHz" });
-  const tapCount = useMemo(
-    () =>
-      doc.edges.reduce(
-        (n, e) => n + (e.from.kind === "tap" ? 1 : 0) + (e.to.kind === "tap" ? 1 : 0),
-        0,
-      ),
-    [doc.edges],
-  );
 
   const [toast, setToast] = useState<{ msg: string; ok?: boolean } | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -302,8 +292,6 @@ export function RlcEditorApp() {
             <br />
             <kbd>Esc</kbd> = 取消连线
             <br />
-            连线中点另一条线 = 接入该线（自动求最短接点）
-            <br />
             滚轮缩放 · 空白处拖动平移 · <kbd>F</kbd> 适配视图
           </div>
         </div>
@@ -371,14 +359,6 @@ export function RlcEditorApp() {
                 <br />
                 终点：{describeEndpoint(selEdge.to)}
                 <br />
-                {selEdge.from.kind === "tap" || selEdge.to.kind === "tap" ? (
-                  <>
-                    连接点（Steiner 点）：
-                    {selEdge.from.kind === "tap" ? ` ${selEdge.from.x},${selEdge.from.y}` : ""}
-                    {selEdge.to.kind === "tap" ? ` ${selEdge.to.x},${selEdge.to.y}` : ""}
-                    <br />
-                  </>
-                ) : null}
                 拐弯数：{selEdgeRoute?.turns ?? "-"}
                 <br />
                 路径质量：
@@ -395,9 +375,7 @@ export function RlcEditorApp() {
                 <>
                   <b style={{ color: "var(--rlc-accent)" }}>正在连线…</b>
                   <br />
-                  点击目标引脚完成连线；或移到一条连线上点击，接入该线（接点由求解器选取，使新线最短，并高亮该线）。
-                  <br />
-                  按 <kbd>Esc</kbd> 取消。
+                  点击目标引脚完成连线，按 <kbd>Esc</kbd> 取消。
                 </>
               ) : (
                 <>
@@ -413,8 +391,6 @@ export function RlcEditorApp() {
           <div className="rlc-hintbox" data-testid="rlc-netlist-info">
             节点 <b>{netlist.nets.length}</b> · 端口 <b>{netlist.ports.length}</b> · 地{" "}
             <b>{netlist.grounds.length}</b>
-            <br />
-            连接点（Steiner 点）<b>{tapCount}</b>
           </div>
           {netlist.nets.length > 0 && (
             <div className="rlc-netlist" data-testid="rlc-netlist">
@@ -436,12 +412,6 @@ export function RlcEditorApp() {
                       {n.terminals.map((t) => t.componentName + "." + t.pinId).join(" · ") || "—"}
                       <br />
                       连线 {n.wires.length} 条{n.length ? ` · ${n.length}px` : ""}
-                      {n.taps.length > 0 && (
-                        <>
-                          <br />
-                          连接点 {n.taps.map((t) => `${t.wireId}→${t.hostWireId}`).join("、")}
-                        </>
-                      )}
                     </div>
                     <div className="rlc-net-actions">
                       <button className="rlc-btn rlc-btn-mini" onClick={() => togglePort(n.name)}>
@@ -518,9 +488,6 @@ export function RlcEditorApp() {
         </span>
         <span>
           降级连线 <b>{degradedCount}</b>
-        </span>
-        <span>
-          结点 <b>{tapCount}</b>
         </span>
         <span>
           网络 <b>{netlist.nets.length}</b>

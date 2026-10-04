@@ -375,10 +375,9 @@ test.describe("RLC editor", () => {
     expect(parsed.edges).toHaveLength(1);
     expect(parsed.edges[0].from.pinId).toBe("p1");
     expect(parsed.edges[0].to.pinId).toBe("p0");
-    // v2 documents declare their endpoints and carry the solved geometry, which is what makes
-    // a reopened file render exactly what was saved.
+    // v2 documents carry the solved geometry, which is what makes a reopened file render
+    // exactly what was saved.
     expect(parsed.version).toBe(2);
-    expect(parsed.edges[0].from.kind).toBe("pin");
     expect(Object.keys(parsed.geometry ?? {})).toHaveLength(1);
     expect(parsed.geometry[parsed.edges[0].id].waypoints.length).toBeGreaterThanOrEqual(2);
 
@@ -391,6 +390,33 @@ test.describe("RLC editor", () => {
     expect(parsedAfter.components).toHaveLength(2);
     // The stored geometry must survive the round trip byte for byte.
     expect(parsedAfter.geometry).toEqual(parsed.geometry);
+  });
+
+  test("reopening redraws the saved geometry instead of re-routing it", async ({ page }) => {
+    // A wire that had to DETOUR is the interesting case: a re-route could plausibly produce a
+    // different (but valid) path, so only storing and replaying the geometry keeps the drawing
+    // identical. This asserts on the rendered path strings, not on a description of them.
+    await placeFromPalette(page, "电阻");
+    await placeFromPalette(page, "电容");
+    const p1 = await pinPoint(page, 0, "p1");
+    await page.mouse.click(p1.x, p1.y);
+    const p0 = await pinPoint(page, 1, "p0");
+    await page.mouse.click(p0.x, p0.y);
+    await expect(page.locator(".rlc-status")).toContainText("连线 1");
+
+    const before = await page.locator("path.rlc-wire").evaluateAll((els) =>
+      els.map((e) => e.getAttribute("d")),
+    );
+    expect(before.length).toBe(1);
+    expect(before[0]).toBeTruthy();
+
+    await page.reload();
+    await expect(page.locator("svg.rlc-canvas")).toBeVisible();
+    await expect(page.locator(".rlc-status")).toContainText("连线 1");
+    const after = await page.locator("path.rlc-wire").evaluateAll((els) =>
+      els.map((e) => e.getAttribute("d")),
+    );
+    expect(after, "reopening must redraw the stored polyline, not a fresh solve").toEqual(before);
   });
 
   test("reports no console errors during a full editing session", async ({ page }) => {
@@ -407,10 +433,7 @@ test.describe("RLC editor", () => {
     expect(errors, `console errors: ${errors.join(" | ")}`).toEqual([]);
   });
 
-  // ── v2: connecting a pin to a WIRE (tap) ────────────────────────────────
-
-  /** Set up two parts joined by one wire, plus a third part moved clear of it to tap with. */
-  async function setupWireAndTapper(page: Page) {
+  test("the exported netlist is structurally valid for scikit-rf", async ({ page }) => {
     await placeFromPalette(page, "电阻");
     await placeFromPalette(page, "电容");
     const p1 = await pinPoint(page, 0, "p1");
@@ -418,159 +441,7 @@ test.describe("RLC editor", () => {
     const p0 = await pinPoint(page, 1, "p0");
     await page.mouse.click(p0.x, p0.y);
     await expect(page.locator(".rlc-status")).toContainText("连线 1");
-    await placeFromPalette(page, "电感");
-    // Palette placement lands on the wire's row; move the tapper below it so the tap under
-    // test is a real branch from free space rather than a part already sitting on the wire.
-    await dragPartBy(page, 2, 260);
-    await expect(page.locator(".rlc-status")).toContainText("降级连线 0");
-    return { p1, p0 };
-  }
 
-  test("highlights the wire under the cursor while a connection is being drawn", async ({ page }) => {
-    await setupWireAndTapper(page);
-    // Start from the new part's pin, then hover the existing wire.
-    const tapPin = await pinPoint(page, 2, "p0");
-    await page.mouse.click(tapPin.x, tapPin.y);
-    await expect(page.locator(".rlc-side")).toContainText("正在连线");
-
-    const onWire = await pointOnWire(page);
-    await page.mouse.move(onWire.x, onWire.y);
-    await expect(page.locator("path.rlc-wire-hovered")).toHaveCount(1);
-    // The preview shows the solved branch and its junction, not a rubber band.
-    await expect(page.getByTestId("rlc-tap-preview")).toBeVisible();
-    await expect(page.getByTestId("rlc-junction-preview")).toBeVisible();
-
-    // Moving away clears the highlight.
-    await page.mouse.move(onWire.x, onWire.y + 300);
-    await expect(page.locator("path.rlc-wire-hovered")).toHaveCount(0);
-  });
-
-  test("clicking a wire creates a junction and the new wire is orthogonal", async ({ page }) => {
-    await setupWireAndTapper(page);
-    await tapFirstWireFromPart(page, 2, "p0");
-
-    await expect(page.locator(".rlc-status")).toContainText("连线 2");
-    await expect(page.locator(".rlc-status")).toContainText("结点 1");
-    // The branch must obey the avoidance contract. Which TIER it achieves depends on how
-    // close the tapper ended up to the trunk, so the check is on the contract rather than on a
-    // particular tier: an "escape" result would mean the router gave up, and that must not
-    // happen in this layout.
-    const statusText = await page.locator(".rlc-status").innerText();
-    const degraded = Number(/降级连线\s*(\d+)/.exec(statusText.replace(/\s+/g, " "))?.[1] ?? "0");
-    expect(degraded, `status: ${statusText}`).toBeLessThanOrEqual(1);
-    // A junction dot is drawn on the host wire.
-    await expect(page.locator("circle.rlc-junction")).toHaveCount(1);
-
-    // The new wire must be orthogonal and must terminate ON the host polyline.
-    const all = await page.locator("path.rlc-wire").all();
-    expect(all.length).toBe(2);
-    const d = await all[1].getAttribute("d");
-    const pts = [...(d ?? "").matchAll(/[MLQ]\s*(-?\d+(?:\.\d+)?)\s*(-?\d+(?:\.\d+)?)/g)].map((m) => ({
-      x: Number(m[1]),
-      y: Number(m[2]),
-    }));
-    expect(isOrthogonal(pts), `tap wire must be orthogonal: ${JSON.stringify(pts)}`).toBe(true);
-
-    // The junction must lie on the host's rendered path.
-    const hostD = (await all[0].getAttribute("d")) ?? "";
-    const hostPts = [...hostD.matchAll(/[MLQ]\s*(-?\d+(?:\.\d+)?)\s*(-?\d+(?:\.\d+)?)/g)].map((m) => ({
-      x: Number(m[1]),
-      y: Number(m[2]),
-    }));
-    const junction = pts[pts.length - 1];
-    let onHost = false;
-    for (let i = 1; i < hostPts.length; i++) {
-      const a = hostPts[i - 1];
-      const b = hostPts[i];
-      const box = {
-        left: Math.min(a.x, b.x) - 0.5,
-        right: Math.max(a.x, b.x) + 0.5,
-        top: Math.min(a.y, b.y) - 0.5,
-        bottom: Math.max(a.y, b.y) + 0.5,
-      };
-      if (junction.x >= box.left && junction.x <= box.right && junction.y >= box.top && junction.y <= box.bottom) {
-        onHost = true;
-        break;
-      }
-    }
-    expect(onHost, `junction ${JSON.stringify(junction)} must lie on the host path`).toBe(true);
-  });
-
-  test("adding a tap leaves the existing wire's geometry unchanged", async ({ page }) => {
-    await setupWireAndTapper(page);
-    const hostBefore = await page.locator("path.rlc-wire").first().getAttribute("d");
-
-    await tapFirstWireFromPart(page, 2, "p0");
-    await expect(page.locator(".rlc-status")).toContainText("连线 2");
-
-    const hostAfter = await page.locator("path.rlc-wire").first().getAttribute("d");
-    expect(hostAfter, "the host wire must be rendered identically after the tap").toBe(hostBefore);
-  });
-
-  test("undo removes the tap and redo restores it", async ({ page }) => {
-    await setupWireAndTapper(page);
-    await tapFirstWireFromPart(page, 2, "p0");
-    await expect(page.locator(".rlc-status")).toContainText("连线 2");
-
-    await page.keyboard.press("Control+z");
-    await expect(page.locator(".rlc-status")).toContainText("连线 1");
-    await expect(page.locator(".rlc-status")).toContainText("结点 0");
-
-    await page.keyboard.press("Control+Shift+z");
-    await expect(page.locator(".rlc-status")).toContainText("连线 2");
-    await expect(page.locator("circle.rlc-junction")).toHaveCount(1);
-  });
-
-  test("deleting the host wire also removes the wire that tapped it", async ({ page }) => {
-    await setupWireAndTapper(page);
-    await tapFirstWireFromPart(page, 2, "p0");
-    await expect(page.locator(".rlc-status")).toContainText("连线 2");
-
-    // Select the host wire, then delete it.
-    const clickable = await pointOnWire(page);
-    await page.mouse.click(clickable.x, clickable.y - 1);
-    await page.keyboard.press("Delete");
-    // Both wires go: the branch cannot outlive its host.
-    await expect(page.locator(".rlc-status")).toContainText("连线 0");
-    await expect(page.locator("circle.rlc-junction")).toHaveCount(0);
-  });
-
-  test("a tap survives a reload and the drawing is identical", async ({ page }) => {
-    await setupWireAndTapper(page);
-    await tapFirstWireFromPart(page, 2, "p0");
-    await expect(page.locator(".rlc-status")).toContainText("连线 2");
-
-    const before = await page.locator("path.rlc-wire").evaluateAll((els) =>
-      els.map((e) => e.getAttribute("d")),
-    );
-
-    await page.reload();
-    await expect(page.locator("svg.rlc-canvas")).toBeVisible();
-    await expect(page.locator(".rlc-status")).toContainText("连线 2");
-    await expect(page.locator("circle.rlc-junction")).toHaveCount(1);
-
-    const after = await page.locator("path.rlc-wire").evaluateAll((els) =>
-      els.map((e) => e.getAttribute("d")),
-    );
-    expect(after, "reopening must redraw the saved geometry, not a fresh route").toEqual(before);
-  });
-
-  test("the netlist panel lists the tapped node with its junction", async ({ page }) => {
-    await setupWireAndTapper(page);
-    await tapFirstWireFromPart(page, 2, "p0");
-
-    const netlist = page.getByTestId("rlc-netlist");
-    await expect(netlist).toBeVisible();
-    // The tapped part joins the host's node, and the junction is reported.
-    await expect(page.getByTestId("rlc-netlist-info")).toContainText("连接点（Steiner 点）1");
-    await expect(netlist).toContainText("连接点");
-  });
-
-  test("exports a scikit-rf netlist whose connections reference existing networks", async ({ page }) => {
-    await setupWireAndTapper(page);
-    await tapFirstWireFromPart(page, 2, "p0");
-
-    // The export goes through the store directly, so no download plumbing is needed.
     const json = await page.evaluate(() => {
       const w = window as unknown as { __rlcExportNetlist?: () => string };
       return w.__rlcExportNetlist ? w.__rlcExportNetlist() : null;
@@ -583,6 +454,7 @@ test.describe("RLC editor", () => {
     const seen = new Set<string>();
     for (const group of netlist.connections) {
       expect(Array.isArray(group)).toBe(true);
+      expect(group.length).toBeGreaterThan(0);
       for (const [n, p] of group) {
         expect(names.has(n), `connection references network ${n}`).toBe(true);
         const key = `${n}#${p}`;
@@ -590,8 +462,14 @@ test.describe("RLC editor", () => {
         seen.add(key);
       }
     }
-    // The drawing travels with the export.
-    expect(netlist.schematic.wires.length).toBe(2);
-    expect(netlist.schematic.wires.filter((w: { waypoints: unknown[] }) => w.waypoints.length > 0).length).toBe(2);
+    // The drawing travels with the export, so a reimport can redraw it exactly.
+    expect(netlist.schematic.wires.length).toBe(1);
+    expect(netlist.schematic.wires[0].waypoints.length).toBeGreaterThanOrEqual(2);
+    // Component values are SI numbers.
+    for (const n of netlist.networks as { kind: string; value?: number }[]) {
+      if (["resistor", "inductor", "capacitor"].includes(n.kind)) {
+        expect(typeof n.value).toBe("number");
+      }
+    }
   });
 });

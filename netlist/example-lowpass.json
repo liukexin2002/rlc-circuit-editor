@@ -2,8 +2,8 @@
   "format": "rlc-schematic-netlist/2",
   "generator": {
     "app": "rlc-editor",
-    "version": "2.0.0",
-    "routing": "oarsmt-tap/1"
+    "version": "2.1.0",
+    "routing": "orthogonal-a-star/2"
   },
   "frequency": {
     "start": 0.1,
@@ -173,12 +173,10 @@
       {
         "id": "e1",
         "from": {
-          "kind": "pin",
           "componentId": "n1",
           "pinId": "p1"
         },
         "to": {
-          "kind": "pin",
           "componentId": "n2",
           "pinId": "p0"
         },
@@ -197,12 +195,10 @@
       {
         "id": "e2",
         "from": {
-          "kind": "pin",
           "componentId": "n2",
           "pinId": "p1"
         },
         "to": {
-          "kind": "pin",
           "componentId": "n3",
           "pinId": "p0"
         },
@@ -221,57 +217,67 @@
       {
         "id": "e3",
         "from": {
-          "kind": "pin",
+          "componentId": "n2",
+          "pinId": "p1"
+        },
+        "to": {
           "componentId": "n4",
           "pinId": "p0"
         },
-        "to": {
-          "kind": "tap",
-          "edgeId": "e2",
-          "x": 480,
-          "y": 320
-        },
         "waypoints": [
+          {
+            "x": 672,
+            "y": 320
+          },
+          {
+            "x": 704,
+            "y": 320
+          },
+          {
+            "x": 704,
+            "y": 528
+          },
+          {
+            "x": 480,
+            "y": 528
+          },
           {
             "x": 480,
             "y": 688
-          },
-          {
-            "x": 480,
-            "y": 400
-          },
-          {
-            "x": 688,
-            "y": 400
-          },
-          {
-            "x": 688,
-            "y": 320
           }
         ],
-        "quality": "tight"
+        "quality": "clean"
       },
       {
         "id": "e4",
         "from": {
-          "kind": "pin",
+          "componentId": "n2",
+          "pinId": "p1"
+        },
+        "to": {
           "componentId": "n5",
           "pinId": "p0"
         },
-        "to": {
-          "kind": "tap",
-          "edgeId": "e2",
-          "x": 960,
-          "y": 320
-        },
         "waypoints": [
           {
-            "x": 960,
-            "y": 688
+            "x": 672,
+            "y": 320
+          },
+          {
+            "x": 720,
+            "y": 320
+          },
+          {
+            "x": 720,
+            "y": 640
           },
           {
             "x": 960,
-            "y": 320
+            "y": 640
+          },
+          {
+            "x": 960,
+            "y": 688
           }
         ],
         "quality": "clean"
@@ -279,12 +285,10 @@
       {
         "id": "e5",
         "from": {
-          "kind": "pin",
           "componentId": "n4",
           "pinId": "p1"
         },
         "to": {
-          "kind": "pin",
           "componentId": "n5",
           "pinId": "p1"
         },
@@ -328,7 +332,6 @@
       "wires": [
         "e1"
       ],
-      "taps": [],
       "length": 416
     },
     {
@@ -344,17 +347,7 @@
         "e3",
         "e4"
       ],
-      "taps": [
-        {
-          "wireId": "e3",
-          "hostWireId": "e2"
-        },
-        {
-          "wireId": "e4",
-          "hostWireId": "e2"
-        }
-      ],
-      "length": 1520
+      "length": 1856
     },
     {
       "name": "N3",
@@ -365,7 +358,6 @@
       "wires": [
         "e5"
       ],
-      "taps": [],
       "length": 544
     },
     {
@@ -374,7 +366,6 @@
         "n1.p0"
       ],
       "wires": [],
-      "taps": [],
       "length": 0
     },
     {
@@ -383,7 +374,6 @@
         "n3.p1"
       ],
       "wires": [],
-      "taps": [],
       "length": 0
     }
   ],
