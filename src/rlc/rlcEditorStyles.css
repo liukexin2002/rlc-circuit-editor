@@ -353,6 +353,43 @@
   font-family: inherit;
 }
 
+/* A startup problem that must not scroll past unseen: an autosaved document this build could
+ * not read. It stays until dismissed, unlike the transient toast. */
+.rlc-banner {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(720px, calc(100% - 28px));
+  background: #422006;
+  border: 1px solid var(--rlc-warn);
+  color: #fde68a;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.rlc-banner button {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--rlc-warn);
+  color: #fde68a;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rlc-banner button:hover {
+  background: rgba(253, 230, 138, 0.14);
+}
+
 .rlc-toast {
   position: absolute;
   left: 50%;

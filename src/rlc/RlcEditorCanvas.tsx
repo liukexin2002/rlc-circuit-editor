@@ -2,7 +2,7 @@
  * RLC editor canvas.
  *
  * Plain SVG, no diagram library: the interaction surface this editor needs is small
- * (drag a part, click pin→pin to wire, click a pin then a wire to TAP it, pan/zoom), and
+ * (drag a part, click pin→pin to wire, pan/zoom), and
  * owning the coordinate math is what lets the wire geometry, the hit tests and the routing
  * grid all agree exactly.
  *

@@ -38,6 +38,7 @@ import { waypointsToSvgPath } from "../pathfinding";
 import {
   DOC_VERSION,
   HISTORY_LIMIT,
+  LS_BACKUP_KEY,
   LS_KEY,
   WIRE_CORNER_RADIUS,
 } from "./rlcConstants";
@@ -60,6 +61,12 @@ interface EditorState {
   degradedCount: number;
   isRouting: boolean;
   geometryStatus: GeometryStatus;
+  /**
+   * A startup problem the user must see (for example an autosaved document this build cannot
+   * read). Null once there is nothing to report.
+   */
+  hydrationNotice: string | null;
+  dismissHydrationNotice: () => void;
 
   selected: SelectionKind;
   selectedId: string | null;
@@ -311,21 +318,44 @@ function saveLocal(doc: RlcDoc): void {
   }
 }
 
-/** Read the autosaved document at module init. */
-function hydrateFromLocalStorage(): RlcDoc {
+/**
+ * Read the autosaved document at module init.
+ *
+ * A document that cannot be read is NOT thrown away silently: the raw bytes are copied to a
+ * backup key first, and the reason is returned so the editor can tell the user what happened
+ * and where their old drawing went. Losing work without a word is the one outcome a user can
+ * do nothing about.
+ */
+function hydrateFromLocalStorage(): { doc: RlcDoc; notice: string | null } {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return emptyRlcDoc();
+    if (!raw) return { doc: emptyRlcDoc(), notice: null };
     const res = validateDoc(JSON.parse(raw));
-    return res.ok ? res.doc : emptyRlcDoc();
-  } catch {
-    return emptyRlcDoc();
+    if (res.ok) return { doc: res.doc, notice: null };
+
+    // Keep the original bytes recoverable, then start from a clean document.
+    let backedUp = false;
+    try {
+      localStorage.setItem(LS_BACKUP_KEY, raw);
+      backedUp = true;
+    } catch {
+      // Quota or private mode: the notice still explains the failure.
+    }
+    return {
+      doc: emptyRlcDoc(),
+      notice: backedUp
+        ? `无法打开上次自动保存的图纸（${res.error}）。原文件已备份在浏览器本地存储的 ${LS_BACKUP_KEY}，可从「导入 JSON」恢复或另存。`
+        : `无法打开上次自动保存的图纸（${res.error}）。`,
+    };
+  } catch (e) {
+    return { doc: emptyRlcDoc(), notice: `读取本地自动保存失败：${(e as Error).message}` };
   }
 }
 
 export const useRlcStore = create<EditorState>((set, get) => {
   // ── Startup: prefer stored geometry, verify it, never silently replace it.
-  const hydrated = hydrateFromLocalStorage();
+  const hydration = hydrateFromLocalStorage();
+  const hydrated = hydration.doc;
   const stored = routesFromGeometry(hydrated);
   const fresh = recomputeRoutes(hydrated, hydrated.avoidWires);
 
@@ -371,6 +401,8 @@ export const useRlcStore = create<EditorState>((set, get) => {
     degradedCount: startDegraded,
     isRouting: false,
     geometryStatus: startStatus,
+    hydrationNotice: hydration.notice,
+    dismissHydrationNotice: () => set({ hydrationNotice: null }),
 
     selected: null,
     selectedId: null,
@@ -667,9 +699,18 @@ export const useRlcStore = create<EditorState>((set, get) => {
 
     loadFromLocalStorage: () => {
       const restored = hydrateFromLocalStorage();
-      const r = recomputeRoutes(restored, restored.avoidWires);
-      const doc: RlcDoc = { ...restored, geometry: r.geometry };
-      set({ doc, routes: r.routes, degradedCount: r.degradedCount, past: [], future: [], geometryStatus: "solved" });
+      const r = recomputeRoutes(restored.doc, restored.doc.avoidWires);
+      const doc: RlcDoc = { ...restored.doc, geometry: r.geometry };
+      const status: GeometryStatus = doc.edges.length === 0 ? "none" : "solved";
+      set({
+        doc,
+        routes: r.routes,
+        degradedCount: r.degradedCount,
+        past: [],
+        future: [],
+        geometryStatus: status,
+        hydrationNotice: restored.notice,
+      });
     },
   };
 });

@@ -45,7 +45,7 @@ npm run preview:rlc    # 本地预览构建产物
 | 选中 / 删除 | 点击元件或连线；<kbd>Delete</kbd> 删除（删元件会级联删除其两端连线） |
 | 撤销 / 重做 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
 | 平移 / 缩放 | 空白处拖动 / 滚轮；<kbd>F</kbd> 适配视图 |
-| 保存 | 自动保存到浏览器本地；也可导出 / 导入 JSON |
+| 保存 | 自动保存到浏览器本地；也可导出 / 导入 JSON（若上次自动保存的图纸本版本打不开，会弹出提示并把原文备份，不会静默丢失） |
 | 网表 | 右侧面板显示节点/端口/地；可将节点**设为端口或地**，并导出 scikit-rf 网表 |
 
 ## 重开文件不重绘
@@ -90,7 +90,7 @@ npm run preview:rlc    # 本地预览构建产物
 
 ```bash
 npx vitest run src/__tests__/rlc    # 模型 / 布线 / 网表单测（52 项）
-npm run test:e2e:rlc                # 真实浏览器端到端（13 项，跑本地构建产物）
+npm run test:e2e:rlc                # 真实浏览器端到端（15 项，跑本地构建产物）
 npm run test:e2e:live               # 对已部署的线上链接做验收（13 项，含 v1 归档检查）
 python netlist/skrf_load.py netlist/example-lowpass.json    # 用真 scikit-rf 加载导出文件
 python netlist/check_physics.py netlist/example-lowpass.json # 电路行为与所画拓扑是否一致

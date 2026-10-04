@@ -636,8 +636,8 @@ export function routeDocument(doc: RlcDoc, opts: { avoidWires?: boolean } = {}):
 
   const ordered = [...doc.edges].sort(compareRouteOrder);
   const penalties: PenaltyZone[] = [];
-  // Solved geometry of every wire so far — a tap anchor projects itself onto its host, so the
-  // host must already be solved. Numeric id ordering guarantees it is.
+  // Solved geometry of every wire so far. Wires are solved in numeric id order, so this is
+  // complete for every wire already placed when the current one is routed.
   const geometry: Record<string, RlcWireGeometry> = {};
 
   for (const edge of ordered) {

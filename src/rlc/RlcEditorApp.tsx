@@ -79,6 +79,8 @@ export function RlcEditorApp() {
   const togglePort = useRlcStore((s) => s.togglePort);
   const toggleGround = useRlcStore((s) => s.toggleGround);
   const geometryStatus = useRlcStore((s) => s.geometryStatus);
+  const hydrationNotice = useRlcStore((s) => s.hydrationNotice);
+  const dismissHydrationNotice = useRlcStore((s) => s.dismissHydrationNotice);
   const reroute = useRlcStore((s) => s.reroute);
   // Derived from `doc`, which is a stable reference between edits — deriving inside the
   // selector means the netlist is recomputed only when the document actually changes. A
@@ -298,6 +300,14 @@ export function RlcEditorApp() {
 
         <div className="rlc-canvas-wrap" ref={canvasWrapRef}>
           <RlcEditorCanvas />
+          {hydrationNotice && (
+            <div className="rlc-banner" data-testid="rlc-hydration-notice">
+              <span>{hydrationNotice}</span>
+              <button type="button" onClick={dismissHydrationNotice}>
+                知道了
+              </button>
+            </div>
+          )}
           {toast && (
             <div className={`rlc-toast${toast.ok ? " rlc-toast-ok" : ""}`}>{toast.msg}</div>
           )}

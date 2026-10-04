@@ -1,0 +1,26 @@
+﻿Do not lose a document the editor cannot read; report it and keep the bytes
+
+An autosaved document that failed validation was replaced with an empty one, in
+silence. For anyone who had used the tap-enabled build that meant upgrading made
+their drawing disappear with no message and no way to get it back. Found while
+writing a test for the documented legacy-file behaviour, which is exactly the kind
+of claim that should not stay untested.
+
+- hydrateFromLocalStorage now returns the reason alongside the document, copies
+  the unreadable bytes to the rlc-schematic-doc-backup key, and reports what
+  happened instead of swallowing it
+- The reason is shown in a persistent banner (dismissible), not the 3.2 s toast,
+  because a user needs to be able to read it and act on it
+- loadFromLocalStorage reports the same way
+
+New tests (e2e-rlc/rlc-legacy-tap.spec.ts, 2 cases, real browser):
+- importing a tap-era file is refused with a message naming the retired endpoint,
+  and the canvas is unchanged: nothing loaded, nothing silently redrawn
+- a tap-era autosave boots cleanly, shows the banner, keeps the original bytes
+  under the backup key, dismisses, and leaves the editor usable
+
+Also drops two stale comments the removal had left behind (a routing comment and
+the canvas interaction summary).
+
+Verified: tsc -b 0 errors; RLC unit 52/52; local E2E 15/15; upstream 1534/1534
+across 108 files; routing:check all ok.

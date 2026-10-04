@@ -82,3 +82,9 @@ export const HISTORY_LIMIT = 100;
 
 /** localStorage key for the autosaved document. */
 export const LS_KEY = "rlc-schematic-doc-v1";
+
+/**
+ * Where an unreadable autosave is copied before the editor starts fresh, so a document that
+ * this build cannot open is still recoverable by hand instead of being lost.
+ */
+export const LS_BACKUP_KEY = "rlc-schematic-doc-backup";
