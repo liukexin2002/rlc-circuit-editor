@@ -9,7 +9,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e-rlc",
-  testMatch: /live-(deployment|screenshot)\.spec\.ts/,
+  testMatch: /live-(deployment|screenshot|v2|v2-screenshot)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   retries: 1,
@@ -22,4 +22,5 @@ export default defineConfig({
   },
   projects: [{ name: "chrome", use: { ...devices["Desktop Chrome"], channel: "chrome" } }],
 });
+
 
