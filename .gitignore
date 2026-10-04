@@ -76,6 +76,7 @@ src/__tests__/fixtures/reports/baselines/*
 e2e/test-results/
 e2e/screenshots/
 e2e-rlc/test-results/
+e2e-rlc/live-test-results/
 playwright-report/
 .playwright/
 
