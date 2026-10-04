@@ -8,6 +8,13 @@
  *
  * Every mutation is a pure transition on `RlcDoc` committed through `commit()`, which is
  * also the single place the undo stack, autosave and route recomputation are wired.
+ *
+ * ── GEOMETRY IS STORED, NOT JUST RECOMPUTED ─────────────────────────────────
+ * `doc.geometry` holds each wire's solved polyline. When a file is opened, the canvas renders
+ * THAT polyline, so the drawing is identical to what was saved — reopening a file never
+ * quietly re-routes it into a different shape. A fresh solve is still run, but only to CHECK
+ * the stored geometry; a disagreement is reported and the stored shape keeps being drawn
+ * until the user explicitly asks for a re-route.
  */
 
 import { create } from "zustand";
@@ -15,28 +22,65 @@ import {
   emptyRlcDoc,
   makeComponent,
   normalizeRotation,
+  pinKey,
+  removeComponentsCascade,
+  removeEdgesCascade,
+  isPinEndpoint,
   type RlcDoc,
+  type RlcEdge,
+  type RlcEdgeEndpoint,
   type RlcKind,
+  type RlcPinEndpoint,
   type RlcRotation,
+  type RlcWireGeometry,
+  type Pt,
 } from "./rlcModel";
-import { routeDocument, type RlcRoutedWire } from "./rlcRouting";
-import { HISTORY_LIMIT, LS_KEY } from "./rlcConstants";
+import {
+  routeDocument,
+  solveTap,
+  type RlcRoutedWire,
+  type RlcTapSolution,
+} from "./rlcRouting";
+import { waypointsToSvgPath } from "../pathfinding";
+import {
+  DOC_VERSION,
+  HISTORY_LIMIT,
+  LS_KEY,
+  WIRE_CORNER_RADIUS,
+} from "./rlcConstants";
 import { snapToGrid, type GridPos } from "./rlcGeometry";
+import {
+  buildSkrfNetlist,
+  deriveNetlist,
+  formatNetlistText,
+  type SkrfFrequency,
+} from "./rlcNetlist";
 
 export type SelectionKind = "component" | "edge" | null;
+
+/** Whether the geometry currently on screen was stored, verified, or freshly solved. */
+export type GeometryStatus = "none" | "verified" | "mismatch" | "solved";
 
 interface EditorState {
   doc: RlcDoc;
   routes: Record<string, RlcRoutedWire>;
   degradedCount: number;
   isRouting: boolean;
+  geometryStatus: GeometryStatus;
 
   selected: SelectionKind;
   selectedId: string | null;
   /** Pin the user clicked first while drawing a wire, if any. */
-  pendingPin: { componentId: string; pinId: "p0" | "p1" } | null;
+  pendingPin: RlcPinEndpoint | null;
   /** Cursor position of the in-flight wire preview, in world pixels. */
-  previewPoint: { x: number; y: number } | null;
+  previewPoint: Pt | null;
+
+  /** Wire under the cursor while a connection is being drawn (for the highlight). */
+  hoverWireId: string | null;
+  /** Cached tap solution for (pendingPin, hoverWireId). Recomputed only when that pair changes. */
+  tapSolution: RlcTapSolution | null;
+  /** Why a requested tap could not be solved, for an honest message instead of silence. */
+  tapError: string | null;
 
   avoidWires: boolean;
   showGrid: boolean;
@@ -56,83 +100,233 @@ interface EditorState {
   moveComponent: (id: string, x: number, y: number, opts?: { transient?: boolean }) => void;
   rotateComponent: (id: string, delta: 90 | 180 | 270) => void;
   deleteSelection: () => void;
+  deleteEdge: (id: string) => void;
   setValue: (id: string, value: string) => void;
   setLabel: (id: string, label: string) => void;
 
   select: (kind: SelectionKind, id: string | null) => void;
-  /** Mark the START of a multi-step interaction (a drag): the current document is pushed
-   *  onto the undo stack once, and the interaction's transient updates edit in place, so
-   *  one gesture costs exactly one undo step instead of one per pointer event. */
+  /** Mark the START of a multi-step interaction (a drag). */
   beginInteraction: () => void;
   startWire: (componentId: string, pinId: "p0" | "p1") => void;
-  updatePreview: (pt: { x: number; y: number } | null) => void;
+  updatePreview: (pt: Pt | null) => void;
   completeWire: (componentId: string, pinId: "p0" | "p1") => void;
+  /** Tap the hovered wire with the pending pin. Returns true when a wire was created. */
+  completeTap: (edgeId: string) => boolean;
   cancelWire: () => void;
   /** Mark the END of a multi-step interaction: persist the transient edits. */
   endInteraction: () => void;
 
+  /** Update the hover highlight and (re)solve the tap for the hovered wire. */
+  setHoverWire: (edgeId: string | null) => void;
+
+  /** Declare a node as a port / ground, or clear it. Keyed by pin key or net name. */
+  togglePort: (netName: string) => void;
+  toggleGround: (netName: string) => void;
+
   undo: () => void;
   redo: () => void;
   clearAll: () => void;
+  /** Re-run the router and adopt the result, discarding stored geometry. */
+  reroute: () => void;
   importDoc: (json: string) => { ok: boolean; error?: string };
   exportDoc: () => string;
+  exportNetlist: (freq?: SkrfFrequency) => string;
+  exportNetlistText: (freq?: SkrfFrequency) => string;
+  netlistSummary: () => ReturnType<typeof deriveNetlist>;
+  /** Derived netlist, recomputed only when the document changes (see the selector below). */
+  netlist: () => ReturnType<typeof deriveNetlist>;
   setAvoidWires: (v: boolean) => void;
   setShowGrid: (v: boolean) => void;
   recompute: () => void;
   loadFromLocalStorage: () => void;
 }
 
-function recomputeRoutes(doc: RlcDoc, avoidWires: boolean) {
-  const res = routeDocument(doc, { avoidWires });
-  return { routes: res.wires, degradedCount: res.degradedCount };
+// ── Geometry helpers ─────────────────────────────────────────────────────────
+
+/** Build the renderable wire objects from stored geometry (no solving involved). */
+function routesFromGeometry(
+  doc: RlcDoc,
+): { routes: Record<string, RlcRoutedWire>; degradedCount: number } | null {
+  const entries = Object.entries(doc.geometry);
+  if (entries.length === 0) return null;
+  const routes: Record<string, RlcRoutedWire> = {};
+  let degradedCount = 0;
+  for (const [id, g] of entries) {
+    if (!doc.edges.some((e) => e.id === id)) continue;
+    if (!g || !Array.isArray(g.waypoints) || g.waypoints.length < 2) continue;
+    const degraded = g.quality !== "clean";
+    if (degraded) degradedCount++;
+    routes[id] = {
+      edgeId: id,
+      waypoints: g.waypoints.map((p) => ({ x: p.x, y: p.y })),
+      svgPath: waypointsToSvgPath(g.waypoints, WIRE_CORNER_RADIUS),
+      quality: (g.quality as RlcRoutedWire["quality"]) ?? "clean",
+      degraded,
+      turns: 0,
+    };
+  }
+  // Partial stored geometry is not usable as "the" geometry: fall back to solving.
+  if (Object.keys(routes).length !== doc.edges.length) return null;
+  return { routes, degradedCount };
 }
 
-/** Narrow validation for imported documents: reject anything the editor cannot render. */
+function recomputeRoutes(doc: RlcDoc, avoidWires: boolean) {
+  const res = routeDocument(doc, { avoidWires });
+  const geometry: Record<string, RlcWireGeometry> = {};
+  for (const [id, w] of Object.entries(res.wires)) {
+    geometry[id] = { waypoints: w.waypoints, quality: w.quality };
+  }
+  return { routes: res.wires, degradedCount: res.degradedCount, geometry };
+}
+
+/** True when stored and freshly solved geometry agree point for point. */
+function geometryMatches(stored: RlcDoc["geometry"], fresh: RlcDoc["geometry"]): boolean {
+  const ids = new Set([...Object.keys(stored), ...Object.keys(fresh)]);
+  for (const id of ids) {
+    const a = stored[id]?.waypoints;
+    const b = fresh[id]?.waypoints;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].x !== b[i].x || a[i].y !== b[i].y) return false;
+    }
+  }
+  return true;
+}
+
+// ── Import validation & migration ───────────────────────────────────────────
+
+function isPinId(v: unknown): v is "p0" | "p1" {
+  return v === "p0" || v === "p1";
+}
+
+/**
+ * Normalise one endpoint.
+ *
+ * Accepts the v1 shape (`{componentId, pinId}` with no `kind`) and promotes it to a pin
+ * endpoint, so every v1 document loads unchanged. Anything else is rejected rather than
+ * guessed at.
+ */
+function normalizeEndpoint(raw: unknown, edgeIds: Set<string>): RlcEdgeEndpoint | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind === "tap" || (typeof r.edgeId === "string" && r.kind !== "pin")) {
+    if (typeof r.edgeId !== "string" || !edgeIds.has(r.edgeId)) return null;
+    if (!Number.isFinite(r.x) || !Number.isFinite(r.y)) return null;
+    return { kind: "tap", edgeId: r.edgeId, x: Number(r.x), y: Number(r.y) };
+  }
+  if (typeof r.componentId !== "string" || !isPinId(r.pinId)) return null;
+  return { kind: "pin", componentId: r.componentId, pinId: r.pinId };
+}
+
+/**
+ * Narrow validation for documents: reject anything the editor cannot render, and migrate the
+ * v1 shape. Returns the migrated document plus whether any wire needed solving (which happens
+ * when a document carries no stored geometry).
+ */
 function validateDoc(raw: unknown): { ok: true; doc: RlcDoc } | { ok: false; error: string } {
   if (typeof raw !== "object" || raw === null) return { ok: false, error: "不是 JSON 对象" };
-  const d = raw as Partial<RlcDoc>;
+  const d = raw as Record<string, unknown>;
   if (!Array.isArray(d.components)) return { ok: false, error: "缺少 components 数组" };
   if (!Array.isArray(d.edges)) return { ok: false, error: "缺少 edges 数组" };
   const kinds: RlcKind[] = ["resistor", "inductor", "capacitor"];
   const ids = new Set<string>();
-  for (const c of d.components) {
+  for (const c of d.components as Record<string, unknown>[]) {
     if (typeof c?.id !== "string" || ids.has(c.id)) return { ok: false, error: `元件 id 非法或重复: ${String(c?.id)}` };
     ids.add(c.id);
-    if (!kinds.includes(c.kind)) return { ok: false, error: `未知元件类型: ${String(c.kind)}` };
-    if (![0, 90, 180, 270].includes(c.rotation)) return { ok: false, error: `旋转角非法: ${String(c.rotation)}` };
+    if (!kinds.includes(c.kind as RlcKind)) return { ok: false, error: `未知元件类型: ${String(c.kind)}` };
+    if (![0, 90, 180, 270].includes(c.rotation as number)) return { ok: false, error: `旋转角非法: ${String(c.rotation)}` };
     if (!Number.isFinite(c.x) || !Number.isFinite(c.y)) return { ok: false, error: `坐标非法: ${c.id}` };
   }
-  for (const e of d.edges) {
+
+  const rawEdges = d.edges as Record<string, unknown>[];
+  for (const e of rawEdges) {
     if (typeof e?.id !== "string") return { ok: false, error: "连线缺少 id" };
-    if (!ids.has(e.from?.componentId) || !ids.has(e.to?.componentId)) {
-      return { ok: false, error: `连线 ${e.id} 指向不存在的元件` };
+  }
+  const edgeIds = new Set(rawEdges.map((e) => e.id as string));
+
+  const edges: RlcEdge[] = [];
+  for (const e of rawEdges) {
+    const from = normalizeEndpoint(e.from, edgeIds);
+    const to = normalizeEndpoint(e.to, edgeIds);
+    if (!from) return { ok: false, error: `连线 ${e.id} 起点非法` };
+    if (!to) return { ok: false, error: `连线 ${e.id} 终点非法` };
+    for (const end of [from, to]) {
+      if (isPinEndpoint(end) && !ids.has(end.componentId)) {
+        return { ok: false, error: `连线 ${e.id} 指向不存在的元件` };
+      }
     }
-    if (!["p0", "p1"].includes(e.from?.pinId) || !["p0", "p1"].includes(e.to?.pinId)) {
-      return { ok: false, error: `连线 ${e.id} 引脚非法` };
+    if (isPinEndpoint(from) && isPinEndpoint(to) &&
+        from.componentId === to.componentId && from.pinId === to.pinId) {
+      return { ok: false, error: `连线 ${e.id} 两端是同一个引脚` };
+    }
+    edges.push({ id: e.id as string, from, to });
+  }
+  // A tap must not target its own wire, and must not form a cycle through other taps.
+  for (const e of edges) {
+    for (const end of [e.from, e.to]) {
+      if (!isPinEndpoint(end) && end.edgeId === e.id) {
+        return { ok: false, error: `连线 ${e.id} 连接到自己` };
+      }
     }
   }
+
   const order: RlcKind[] = ["resistor", "inductor", "capacitor"];
   const labelSeq: Record<RlcKind, number> = { resistor: 0, inductor: 0, capacitor: 0 };
-  if (d.labelSeq && typeof d.labelSeq === "object") {
+  const rawLabelSeq = d.labelSeq;
+  if (rawLabelSeq && typeof rawLabelSeq === "object") {
     for (const kind of order) {
-      const v = (d.labelSeq as Partial<Record<RlcKind, number>>)[kind];
+      const v = (rawLabelSeq as Partial<Record<RlcKind, number>>)[kind];
       if (typeof v === "number" && Number.isFinite(v)) labelSeq[kind] = v;
     }
   }
   // Repair counters so a hand-edited file cannot mint a duplicate reference designator.
+  const components = (d.components as Record<string, unknown>[]).map((c) => ({ ...c })) as unknown as RlcDoc["components"];
   for (const kind of order) {
-    const used = d.components.filter((c) => c.kind === kind).length;
+    const used = components.filter((c) => c.kind === kind).length;
     labelSeq[kind] = Math.max(labelSeq[kind], used);
   }
+
+  // Stored geometry: keep only entries that belong to a live wire and are well-formed.
+  const geometry: Record<string, RlcWireGeometry> = {};
+  const rawGeom = d.geometry;
+  if (rawGeom && typeof rawGeom === "object") {
+    for (const [id, g] of Object.entries(rawGeom as Record<string, unknown>)) {
+      if (!edgeIds.has(id)) continue;
+      const gg = g as Record<string, unknown>;
+      if (!Array.isArray(gg?.waypoints) || (gg.waypoints as unknown[]).length < 2) continue;
+      const pts = (gg.waypoints as Record<string, unknown>[]).filter(
+        (p) => Number.isFinite(p?.x) && Number.isFinite(p?.y),
+      );
+      if (pts.length < 2) continue;
+      geometry[id] = {
+        waypoints: pts.map((p) => ({ x: Number(p.x), y: Number(p.y) })),
+        quality: typeof gg.quality === "string" ? gg.quality : "clean",
+      };
+    }
+  }
+
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+
   return {
     ok: true,
     doc: {
-      version: 1,
-      components: d.components.map((c) => ({ ...c })),
-      edges: d.edges.map((e) => ({ ...e, from: { ...e.from }, to: { ...e.to } })),
-      nextComponentSeq: d.nextComponentSeq ?? d.components.length + 1,
-      nextEdgeSeq: d.nextEdgeSeq ?? d.edges.length + 1,
+      version: DOC_VERSION,
+      components,
+      edges,
+      nextComponentSeq:
+        typeof d.nextComponentSeq === "number" && Number.isFinite(d.nextComponentSeq)
+          ? d.nextComponentSeq
+          : components.length + 1,
+      nextEdgeSeq:
+        typeof d.nextEdgeSeq === "number" && Number.isFinite(d.nextEdgeSeq)
+          ? d.nextEdgeSeq
+          : edges.length + 1,
       labelSeq,
+      geometry,
+      ports: strings(d.ports),
+      grounds: strings(d.grounds),
+      avoidWires: d.avoidWires === undefined ? true : Boolean(d.avoidWires),
     },
   };
 }
@@ -145,9 +339,7 @@ function saveLocal(doc: RlcDoc): void {
   }
 }
 
-/** Read the autosaved document at module init. Hydrating here (instead of in an effect)
- *  means the editor mounts with its content already present — no flash of an empty canvas,
- *  and one fewer race for the canvas' fit-to-content pass. */
+/** Read the autosaved document at module init. */
 function hydrateFromLocalStorage(): RlcDoc {
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -160,33 +352,67 @@ function hydrateFromLocalStorage(): RlcDoc {
 }
 
 export const useRlcStore = create<EditorState>((set, get) => {
+  // ── Startup: prefer stored geometry, verify it, never silently replace it.
   const hydrated = hydrateFromLocalStorage();
-  const hydratedRoutes = recomputeRoutes(hydrated, true);
+  const stored = routesFromGeometry(hydrated);
+  const fresh = recomputeRoutes(hydrated, hydrated.avoidWires);
+
+  let startRoutes: Record<string, RlcRoutedWire>;
+  let startDegraded: number;
+  let startStatus: GeometryStatus;
+  let startDoc = hydrated;
+
+  if (hydrated.edges.length === 0) {
+    startRoutes = {};
+    startDegraded = 0;
+    startStatus = "none";
+  } else if (stored) {
+    // Render what was saved; the fresh solve is only a check.
+    startRoutes = stored.routes;
+    startDegraded = stored.degradedCount;
+    startStatus = geometryMatches(hydrated.geometry, fresh.geometry) ? "verified" : "mismatch";
+  } else {
+    // No stored geometry (a hand-written netlist): solve once and record it.
+    startRoutes = fresh.routes;
+    startDegraded = fresh.degradedCount;
+    startStatus = "solved";
+    startDoc = { ...hydrated, geometry: fresh.geometry };
+  }
 
   /** Commit a new document: push undo, recompute routes, autosave. */
   const commit = (next: RlcDoc, opts: { transient?: boolean } = {}) => {
     const state = get();
+    const r = recomputeRoutes(next, state.avoidWires);
+    const doc: RlcDoc = { ...next, geometry: r.geometry };
     if (opts.transient) {
-      const { routes, degradedCount } = recomputeRoutes(next, state.avoidWires);
-      set({ doc: next, routes, degradedCount });
+      set({ doc, routes: r.routes, degradedCount: r.degradedCount, geometryStatus: "none" });
       return;
     }
     const past = [...state.past, state.doc].slice(-HISTORY_LIMIT);
-    const { routes, degradedCount } = recomputeRoutes(next, state.avoidWires);
-    set({ doc: next, past, future: [], routes, degradedCount });
-    saveLocal(next);
+    set({ doc, past, future: [], routes: r.routes, degradedCount: r.degradedCount, geometryStatus: "none" });
+    saveLocal(doc);
   };
 
+  /** Cache key for a solved tap, so hover movement never re-solves the same pair. */
+  void ((pin: RlcPinEndpoint | null, wire: string | null) =>
+    pin && wire ? `${pin.componentId}.${pin.pinId}|${wire}` : "");
+
   return {
-    doc: hydrated,
-    routes: hydratedRoutes.routes,
-    degradedCount: hydratedRoutes.degradedCount,
+    doc: startDoc,
+    routes: startRoutes,
+    degradedCount: startDegraded,
     isRouting: false,
+    geometryStatus: startStatus,
+
     selected: null,
     selectedId: null,
     pendingPin: null,
     previewPoint: null,
-    avoidWires: true,
+    hoverWireId: null,
+    tapSolution: null,
+    tapError: null,
+
+    avoidWires: hydrated.avoidWires,
     showGrid: true,
     pendingPlaceKind: null,
     past: [],
@@ -238,19 +464,18 @@ export const useRlcStore = create<EditorState>((set, get) => {
       const { selected, selectedId } = state;
       if (!selected || !selectedId) return;
       if (selected === "component") {
-        const next: RlcDoc = {
-          ...state.doc,
-          components: state.doc.components.filter((c) => c.id !== selectedId),
-          edges: state.doc.edges.filter(
-            (e) => e.from.componentId !== selectedId && e.to.componentId !== selectedId,
-          ),
-        };
-        commit(next);
+        // Cascade: the part's wires, plus anything that tapped those wires.
+        commit(removeComponentsCascade(state.doc, [selectedId]));
       } else {
-        const next: RlcDoc = { ...state.doc, edges: state.doc.edges.filter((e) => e.id !== selectedId) };
-        commit(next);
+        commit(removeEdgesCascade(state.doc, [selectedId]));
       }
       set({ selected: null, selectedId: null });
+    },
+
+    deleteEdge: (id) => {
+      const state = get();
+      commit(removeEdgesCascade(state.doc, [id]));
+      if (state.selectedId === id) set({ selected: null, selectedId: null });
     },
 
     setValue: (id, value) => {
@@ -279,7 +504,14 @@ export const useRlcStore = create<EditorState>((set, get) => {
     },
 
     startWire: (componentId, pinId) =>
-      set({ pendingPin: { componentId, pinId }, selected: null, selectedId: null }),
+      set({
+        pendingPin: { kind: "pin", componentId, pinId },
+        selected: null,
+        selectedId: null,
+        hoverWireId: null,
+        tapSolution: null,
+        tapError: null,
+      }),
 
     updatePreview: (pt) => set({ previewPoint: pt }),
 
@@ -287,86 +519,155 @@ export const useRlcStore = create<EditorState>((set, get) => {
       const state = get();
       const pending = state.pendingPin;
       if (!pending) return;
-      set({ pendingPin: null, previewPoint: null });
-      // Reject self-connection on the same pin; allow the two pins of one part to be wired
-      // only through a different route (same component + same pin is meaningless).
+      set({ pendingPin: null, previewPoint: null, hoverWireId: null, tapSolution: null, tapError: null });
       if (pending.componentId === componentId && pending.pinId === pinId) return;
-      const exists = state.doc.edges.some(
-        (e) =>
-          (e.from.componentId === pending.componentId &&
-            e.from.pinId === pending.pinId &&
-            e.to.componentId === componentId &&
-            e.to.pinId === pinId) ||
-          (e.to.componentId === pending.componentId &&
-            e.to.pinId === pending.pinId &&
-            e.from.componentId === componentId &&
-            e.from.pinId === pinId),
-      );
-      if (exists) return;
-      const next: RlcDoc = {
-        ...state.doc,
-        edges: [
-          ...state.doc.edges,
-          {
-            id: `e${state.doc.nextEdgeSeq}`,
-            from: { componentId: pending.componentId, pinId: pending.pinId },
-            to: { componentId, pinId },
-          },
-        ],
-        nextEdgeSeq: state.doc.nextEdgeSeq + 1,
-      };
-      commit(next);
+      const target: RlcEdgeEndpoint = { kind: "pin", componentId, pinId };
+      if (!canConnect(state.doc, pending, target)) return;
+      commit(appendEdge(state.doc, pending, target));
     },
 
-    cancelWire: () => set({ pendingPin: null, previewPoint: null }),
+    completeTap: (edgeId) => {
+      const state = get();
+      const pending = state.pendingPin;
+      if (!pending) return false;
 
-  endInteraction: () => {
-    // Persist whatever a transient (drag) sequence produced. Skipped while a wire is being
-    // drawn so an in-flight preview never gets written to storage.
-    const state = get();
-    saveLocal(state.doc);
-  },
+      // Solve against the CURRENT document, then verify the result is still a legal addition.
+      const solution =
+        state.tapSolution && state.hoverWireId === edgeId
+          ? state.tapSolution
+          : solveTap(state.doc, pending, edgeId, { baseGeometry: state.doc.geometry });
+      if (!solution) {
+        set({ tapError: "该连线无法从选定引脚接入（找不到避开元件与既有走线的路径）。" });
+        return false;
+      }
+      const target: RlcEdgeEndpoint = {
+        kind: "tap",
+        edgeId,
+        x: solution.junction.x,
+        y: solution.junction.y,
+      };
+      if (!canConnect(state.doc, pending, target)) {
+        set({ tapError: "该连接会形成自环：同一个节点被重复连接。" });
+        return false;
+      }
+      set({ pendingPin: null, previewPoint: null, hoverWireId: null, tapSolution: null, tapError: null });
+      commit(appendEdge(state.doc, pending, target));
+      return true;
+    },
+
+    cancelWire: () =>
+      set({ pendingPin: null, previewPoint: null, hoverWireId: null, tapSolution: null, tapError: null }),
+
+    endInteraction: () => {
+      const state = get();
+      saveLocal(state.doc);
+    },
+
+    setHoverWire: (edgeId) => {
+      const state = get();
+      if (edgeId === state.hoverWireId) return;
+      if (!edgeId || !state.pendingPin) {
+        set({ hoverWireId: edgeId, tapSolution: null, tapError: null });
+        return;
+      }
+      const solution = solveTap(state.doc, state.pendingPin, edgeId, { baseGeometry: state.doc.geometry });
+      set({
+        hoverWireId: edgeId,
+        tapSolution: solution,
+        tapError: solution ? null : "该连线无法从选定引脚接入。",
+      });
+    },
+
+    togglePort: (netName) => {
+      const state = get();
+      const derived = deriveNetlist(state.doc);
+      const net = derived.nets.find((n) => n.name === netName);
+      if (!net) return;
+      const already = derived.ports.find((p) => p.netName === netName);
+      const ports = already
+        ? state.doc.ports.filter((k) => k !== already.key)
+        : [...state.doc.ports, net.terminals[0].key];
+      commit({ ...state.doc, ports });
+    },
+
+    toggleGround: (netName) => {
+      const state = get();
+      const derived = deriveNetlist(state.doc);
+      const net = derived.nets.find((n) => n.name === netName);
+      if (!net) return;
+      const already = derived.grounds.find((g) => g.netName === netName);
+      const grounds = already
+        ? state.doc.grounds.filter((k) => k !== already.key)
+        : [...state.doc.grounds, net.terminals[0].key];
+      commit({ ...state.doc, grounds });
+    },
 
     undo: () => {
       const state = get();
       if (state.past.length === 0) return;
       const prev = state.past[state.past.length - 1];
-      const { routes, degradedCount } = recomputeRoutes(prev, state.avoidWires);
+      const r = recomputeRoutes(prev, state.avoidWires);
+      const doc: RlcDoc = { ...prev, geometry: r.geometry };
       set({
-        doc: prev,
+        doc,
         past: state.past.slice(0, -1),
         future: [state.doc, ...state.future].slice(0, HISTORY_LIMIT),
-        routes,
-        degradedCount,
+        routes: r.routes,
+        degradedCount: r.degradedCount,
+        geometryStatus: "none",
         selected: null,
         selectedId: null,
+        pendingPin: null,
+        hoverWireId: null,
+        tapSolution: null,
       });
-      saveLocal(prev);
+      saveLocal(doc);
     },
 
     redo: () => {
       const state = get();
       if (state.future.length === 0) return;
       const next = state.future[0];
-      const { routes, degradedCount } = recomputeRoutes(next, state.avoidWires);
+      const r = recomputeRoutes(next, state.avoidWires);
+      const doc: RlcDoc = { ...next, geometry: r.geometry };
       set({
-        doc: next,
+        doc,
         past: [...state.past, state.doc].slice(-HISTORY_LIMIT),
         future: state.future.slice(1),
-        routes,
-        degradedCount,
+        routes: r.routes,
+        degradedCount: r.degradedCount,
+        geometryStatus: "none",
         selected: null,
         selectedId: null,
+        pendingPin: null,
+        hoverWireId: null,
+        tapSolution: null,
       });
-      saveLocal(next);
+      saveLocal(doc);
     },
 
     clearAll: () => {
-      const fresh = emptyRlcDoc();
       const state = get();
+      const freshDoc = emptyRlcDoc();
       set({ past: [...state.past, state.doc].slice(-HISTORY_LIMIT), future: [] });
-      commit(fresh);
-      set({ selected: null, selectedId: null, pendingPin: null, previewPoint: null });
+      commit(freshDoc);
+      set({
+        selected: null,
+        selectedId: null,
+        pendingPin: null,
+        previewPoint: null,
+        hoverWireId: null,
+        tapSolution: null,
+        geometryStatus: "none",
+      });
+    },
+
+    reroute: () => {
+      const state = get();
+      const r = recomputeRoutes(state.doc, state.avoidWires);
+      const doc: RlcDoc = { ...state.doc, geometry: r.geometry };
+      set({ doc, routes: r.routes, degradedCount: r.degradedCount, geometryStatus: "none" });
+      saveLocal(doc);
     },
 
     importDoc: (json) => {
@@ -380,18 +681,65 @@ export const useRlcStore = create<EditorState>((set, get) => {
       if (!res.ok) return { ok: false, error: res.error };
       const state = get();
       const past = [...state.past, state.doc].slice(-HISTORY_LIMIT);
-      const { routes, degradedCount } = recomputeRoutes(res.doc, state.avoidWires);
-      set({ doc: res.doc, past, future: [], routes, degradedCount, selected: null, selectedId: null });
-      saveLocal(res.doc);
+
+      // Honour stored geometry if the file carries it; otherwise solve and record.
+      const storedRoutes = routesFromGeometry(res.doc);
+      const fresh = recomputeRoutes(res.doc, res.doc.avoidWires);
+      let doc = res.doc;
+      let routes = fresh.routes;
+      let degradedCount = fresh.degradedCount;
+      let status: GeometryStatus = "solved";
+      if (res.doc.edges.length === 0) {
+        status = "none";
+      } else if (storedRoutes) {
+        routes = storedRoutes.routes;
+        degradedCount = storedRoutes.degradedCount;
+        status = geometryMatches(res.doc.geometry, fresh.geometry) ? "verified" : "mismatch";
+      } else {
+        doc = { ...res.doc, geometry: fresh.geometry };
+      }
+
+      set({
+        doc,
+        past,
+        future: [],
+        routes,
+        degradedCount,
+        geometryStatus: status,
+        avoidWires: res.doc.avoidWires,
+        selected: null,
+        selectedId: null,
+        pendingPin: null,
+        hoverWireId: null,
+        tapSolution: null,
+      });
+      saveLocal(doc);
       return { ok: true };
     },
 
     exportDoc: () => JSON.stringify(get().doc, null, 2),
 
+    exportNetlist: (freq) => {
+      const state = get();
+      const { netlist } = buildSkrfNetlist(state.doc, freq ? { frequency: freq } : {});
+      return JSON.stringify(netlist, null, 2);
+    },
+
+    exportNetlistText: (freq) => {
+      const { netlist } = buildSkrfNetlist(get().doc, freq ? { frequency: freq } : {});
+      return formatNetlistText(netlist);
+    },
+
+    netlistSummary: () => deriveNetlist(get().doc),
+
+    netlist: () => deriveNetlist(get().doc),
+
     setAvoidWires: (v) => {
       const state = get();
-      const { routes, degradedCount } = recomputeRoutes(state.doc, v);
-      set({ avoidWires: v, routes, degradedCount });
+      const r = recomputeRoutes(state.doc, v);
+      const doc: RlcDoc = { ...state.doc, avoidWires: v, geometry: r.geometry };
+      set({ avoidWires: v, doc, routes: r.routes, degradedCount: r.degradedCount, geometryStatus: "none" });
+      saveLocal(doc);
     },
 
     setShowGrid: (v) => set({ showGrid: v }),
@@ -402,17 +750,80 @@ export const useRlcStore = create<EditorState>((set, get) => {
 
     recompute: () => {
       const state = get();
-      const { routes, degradedCount } = recomputeRoutes(state.doc, state.avoidWires);
-      set({ routes, degradedCount });
+      const r = recomputeRoutes(state.doc, state.avoidWires);
+      const doc: RlcDoc = { ...state.doc, geometry: r.geometry };
+      set({ doc, routes: r.routes, degradedCount: r.degradedCount });
+      saveLocal(doc);
     },
 
     loadFromLocalStorage: () => {
-      // Kept for explicit re-hydration (e.g. a future "revert to saved" action). The store
-      // already hydrates at creation, so mounting does not need to call this.
       const restored = hydrateFromLocalStorage();
-      const state = get();
-      const { routes, degradedCount } = recomputeRoutes(restored, state.avoidWires);
-      set({ doc: restored, routes, degradedCount, past: [], future: [] });
+      const r = recomputeRoutes(restored, restored.avoidWires);
+      const doc: RlcDoc = { ...restored, geometry: r.geometry };
+      set({ doc, routes: r.routes, degradedCount: r.degradedCount, past: [], future: [], geometryStatus: "solved" });
     },
   };
 });
+
+// ── Pure helpers used by the store ──────────────────────────────────────────
+
+/** Append an edge with the next free id. */
+function appendEdge(doc: RlcDoc, from: RlcEdgeEndpoint, to: RlcEdgeEndpoint): RlcDoc {
+  return {
+    ...doc,
+    edges: [...doc.edges, { id: `e${doc.nextEdgeSeq}`, from, to }],
+    nextEdgeSeq: doc.nextEdgeSeq + 1,
+  };
+}
+
+/**
+ * Would this connection be legal?
+ *
+ * Two rules, both about the netlist being a TREE (which is what scikit-rf needs to build a
+ * circuit without duplicate node references):
+ *
+ *   1. The exact same pair of endpoints must not already be wired.
+ *   2. The two sides must not ALREADY be on the same node — that would close a loop. This is
+ *      the rule that makes a tap onto a wire you are already connected to a no-op instead of
+ *      a silent short.
+ */
+function canConnect(doc: RlcDoc, from: RlcEdgeEndpoint, to: RlcEdgeEndpoint): boolean {
+  const same = (a: RlcEdgeEndpoint, b: RlcEdgeEndpoint) => {
+    if (isPinEndpoint(a) && isPinEndpoint(b)) {
+      return a.componentId === b.componentId && a.pinId === b.pinId;
+    }
+    if (!isPinEndpoint(a) && !isPinEndpoint(b)) {
+      return a.edgeId === b.edgeId && a.x === b.x && a.y === b.y;
+    }
+    return false;
+  };
+  for (const e of doc.edges) {
+    if ((same(e.from, from) && same(e.to, to)) || (same(e.to, from) && same(e.from, to))) return false;
+  }
+
+  // Union-find over the derived netlist elements, then ask whether the two ends are already
+  // in the same net.
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let r = parent.get(x) ?? x;
+    if (r === x) {
+      if (!parent.has(x)) parent.set(x, x);
+      return x;
+    }
+    const root = find(r);
+    parent.set(x, root);
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  const elemOf = (e: RlcEdgeEndpoint) =>
+    isPinEndpoint(e) ? `p:${pinKey(e.componentId, e.pinId)}` : `w:${e.edgeId}`;
+  for (const e of doc.edges) {
+    union(`w:${e.id}`, elemOf(e.from));
+    union(`w:${e.id}`, elemOf(e.to));
+  }
+  return find(elemOf(from)) !== find(elemOf(to));
+}

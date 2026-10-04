@@ -6,13 +6,35 @@
  * the document contains.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RlcEditorCanvas } from "./RlcEditorCanvas";
 import { useRlcStore } from "./rlcStore";
-import { KIND_DEFAULT_VALUE, KIND_LABEL, type RlcKind, type RlcRotation } from "./rlcModel";
+import {
+  KIND_DEFAULT_VALUE,
+  KIND_LABEL,
+  isPinEndpoint,
+  type RlcEdgeEndpoint,
+  type RlcKind,
+  type RlcRotation,
+} from "./rlcModel";
 import { symbolGeometry } from "./rlcSymbols";
-import { GRID } from "./rlcConstants";
+import { deriveNetlist } from "./rlcNetlist";
+import { EDITOR_VERSION, GRID } from "./rlcConstants";
 import "./rlcEditorStyles.css";
+
+/** Readable description of a wire end, whether it is a pin or a junction on another wire. */
+function describeEndpoint(e: RlcEdgeEndpoint): string {
+  if (isPinEndpoint(e)) return `${e.componentId} / ${e.pinId}`;
+  return `连线 ${e.edgeId} 上 (${e.x}, ${e.y})`;
+}
+
+/** What to say about how the current geometry was obtained. */
+const GEOMETRY_LABEL: Record<string, string> = {
+  none: "",
+  verified: "几何已校验一致",
+  mismatch: "几何与重算不一致（按保存几何显示）",
+  solved: "已重新求解几何",
+};
 
 /** Tiny inline symbol thumbnail for the palette (same geometry as the canvas). */
 function PaletteGlyph({ kind }: { kind: RlcKind }) {
@@ -54,6 +76,25 @@ export function RlcEditorApp() {
   const importDoc = useRlcStore((s) => s.importDoc);
   const setAvoidWires = useRlcStore((s) => s.setAvoidWires);
   const setShowGrid = useRlcStore((s) => s.setShowGrid);
+  const exportNetlist = useRlcStore((s) => s.exportNetlist);
+  const exportNetlistText = useRlcStore((s) => s.exportNetlistText);
+  const togglePort = useRlcStore((s) => s.togglePort);
+  const toggleGround = useRlcStore((s) => s.toggleGround);
+  const geometryStatus = useRlcStore((s) => s.geometryStatus);
+  const reroute = useRlcStore((s) => s.reroute);
+  // Derived from `doc`, which is a stable reference between edits — deriving inside the
+  // selector means the netlist is recomputed only when the document actually changes. A
+  // selector that returned a FRESH object every render would loop React forever.
+  const netlist = useMemo(() => deriveNetlist(doc), [doc]);
+  const [freq, setFreq] = useState({ start: 1, stop: 10, npoints: 1001, unit: "GHz" });
+  const tapCount = useMemo(
+    () =>
+      doc.edges.reduce(
+        (n, e) => n + (e.from.kind === "tap" ? 1 : 0) + (e.to.kind === "tap" ? 1 : 0),
+        0,
+      ),
+    [doc.edges],
+  );
 
   const [toast, setToast] = useState<{ msg: string; ok?: boolean } | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -68,6 +109,16 @@ export function RlcEditorApp() {
 
   // The autosaved document is restored by the store when it is created; there is nothing
   // to hydrate on mount.
+
+  // Test hook: the browser suite verifies the exported netlist's structure without driving a
+  // file download. Exposed deliberately, and harmless in normal use.
+  useEffect(() => {
+    (window as unknown as { __rlcExportNetlist?: () => string }).__rlcExportNetlist = () =>
+      useRlcStore.getState().exportNetlist();
+    return () => {
+      delete (window as unknown as { __rlcExportNetlist?: () => string }).__rlcExportNetlist;
+    };
+  }, []);
 
   const doExport = useCallback(() => {
     const json = exportDoc();
@@ -101,6 +152,35 @@ export function RlcEditorApp() {
     [importDoc, showToast],
   );
 
+  const doExportNetlist = useCallback(() => {
+    const json = exportNetlist(freq);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "rlc-netlist.skrf.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("已导出 scikit-rf 网表（JSON）", true);
+  }, [exportNetlist, freq, showToast]);
+
+  const doExportNetlistText = useCallback(async () => {
+    const text = exportNetlistText(freq);
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("网表文本已复制到剪贴板", true);
+    } catch {
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "rlc-netlist.txt";
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("网表文本已下载", true);
+    }
+  }, [exportNetlistText, freq, showToast]);
+
   const onDropPart = useCallback(
     (kind: RlcKind) => (e: React.DragEvent<HTMLDivElement>) => {
       e.dataTransfer.setData("application/x-rlc-kind", kind);
@@ -132,6 +212,7 @@ export function RlcEditorApp() {
         <span className="rlc-toolbar-title">
           RLC 电路图编辑器
           <small>电阻 / 电感 / 电容 · 自动正交避障布线</small>
+          <span className="rlc-version" data-testid="rlc-version">v{EDITOR_VERSION}</span>
         </span>
         <div className="rlc-sep" />
         <button className="rlc-btn" onClick={undo} disabled={!canUndo} title="撤销 (Ctrl+Z)">
@@ -221,6 +302,8 @@ export function RlcEditorApp() {
             <br />
             <kbd>Esc</kbd> = 取消连线
             <br />
+            连线中点另一条线 = 接入该线（自动求最短接点）
+            <br />
             滚轮缩放 · 空白处拖动平移 · <kbd>F</kbd> 适配视图
           </div>
         </div>
@@ -284,10 +367,18 @@ export function RlcEditorApp() {
                 <input type="text" readOnly value={selEdge.id} />
               </div>
               <div className="rlc-hintbox">
-                起点：{selEdge.from.componentId} / {selEdge.from.pinId}
+                起点：{describeEndpoint(selEdge.from)}
                 <br />
-                终点：{selEdge.to.componentId} / {selEdge.to.pinId}
+                终点：{describeEndpoint(selEdge.to)}
                 <br />
+                {selEdge.from.kind === "tap" || selEdge.to.kind === "tap" ? (
+                  <>
+                    连接点（Steiner 点）：
+                    {selEdge.from.kind === "tap" ? ` ${selEdge.from.x},${selEdge.from.y}` : ""}
+                    {selEdge.to.kind === "tap" ? ` ${selEdge.to.x},${selEdge.to.y}` : ""}
+                    <br />
+                  </>
+                ) : null}
                 拐弯数：{selEdgeRoute?.turns ?? "-"}
                 <br />
                 路径质量：
@@ -304,7 +395,9 @@ export function RlcEditorApp() {
                 <>
                   <b style={{ color: "var(--rlc-accent)" }}>正在连线…</b>
                   <br />
-                  点击目标引脚完成连线，按 <kbd>Esc</kbd> 取消。
+                  点击目标引脚完成连线；或移到一条连线上点击，接入该线（接点由求解器选取，使新线最短，并高亮该线）。
+                  <br />
+                  按 <kbd>Esc</kbd> 取消。
                 </>
               ) : (
                 <>
@@ -315,6 +408,89 @@ export function RlcEditorApp() {
               )}
             </div>
           )}
+
+          <h3 style={{ marginTop: 6 }}>网表（scikit-rf）</h3>
+          <div className="rlc-hintbox" data-testid="rlc-netlist-info">
+            节点 <b>{netlist.nets.length}</b> · 端口 <b>{netlist.ports.length}</b> · 地{" "}
+            <b>{netlist.grounds.length}</b>
+            <br />
+            连接点（Steiner 点）<b>{tapCount}</b>
+          </div>
+          {netlist.nets.length > 0 && (
+            <div className="rlc-netlist" data-testid="rlc-netlist">
+              {netlist.nets.map((n) => {
+                const isPort = netlist.ports.some((p) => p.netName === n.name);
+                const isGnd = netlist.grounds.some((g) => g.netName === n.name);
+                return (
+                  <div key={n.name} className="rlc-net-row">
+                    <div className="rlc-net-head">
+                      <b>{n.name}</b>
+                      <span className="rlc-net-tags">
+                        {isPort && <span className="rlc-tag rlc-tag-port">PORT</span>}
+                        {isGnd && <span className="rlc-tag rlc-tag-gnd">GND</span>}
+                        {n.dangling && !isPort && !isGnd && <span className="rlc-tag">悬空</span>}
+                        {!n.isTree && <span className="rlc-tag rlc-tag-bad">冗余</span>}
+                      </span>
+                    </div>
+                    <div className="rlc-net-body">
+                      {n.terminals.map((t) => t.componentName + "." + t.pinId).join(" · ") || "—"}
+                      <br />
+                      连线 {n.wires.length} 条{n.length ? ` · ${n.length}px` : ""}
+                      {n.taps.length > 0 && (
+                        <>
+                          <br />
+                          连接点 {n.taps.map((t) => `${t.wireId}→${t.hostWireId}`).join("、")}
+                        </>
+                      )}
+                    </div>
+                    <div className="rlc-net-actions">
+                      <button className="rlc-btn rlc-btn-mini" onClick={() => togglePort(n.name)}>
+                        {isPort ? "取消端口" : "设为端口"}
+                      </button>
+                      <button className="rlc-btn rlc-btn-mini" onClick={() => toggleGround(n.name)}>
+                        {isGnd ? "取消接地" : "设为地"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="rlc-field-row">
+            <div className="rlc-field">
+              <label>起始 (GHz)</label>
+              <input
+                type="number"
+                step="0.1"
+                value={freq.start}
+                onChange={(e) => setFreq((f) => ({ ...f, start: Number(e.target.value) }))}
+              />
+            </div>
+            <div className="rlc-field">
+              <label>终止 (GHz)</label>
+              <input
+                type="number"
+                step="0.1"
+                value={freq.stop}
+                onChange={(e) => setFreq((f) => ({ ...f, stop: Number(e.target.value) }))}
+              />
+            </div>
+            <div className="rlc-field">
+              <label>点数</label>
+              <input
+                type="number"
+                step="1"
+                value={freq.npoints}
+                onChange={(e) => setFreq((f) => ({ ...f, npoints: Number(e.target.value) }))}
+              />
+            </div>
+          </div>
+          <button className="rlc-btn" onClick={doExportNetlist} data-testid="rlc-export-netlist">
+            ⬇ 导出网表 JSON（scikit-rf）
+          </button>
+          <button className="rlc-btn" onClick={doExportNetlistText} data-testid="rlc-export-netlist-text">
+            📋 复制网表文本
+          </button>
 
           <h3 style={{ marginTop: 6 }}>图例</h3>
           <div className="rlc-hintbox">
@@ -342,9 +518,28 @@ export function RlcEditorApp() {
         </span>
         <span>
           降级连线 <b>{degradedCount}</b>
+        </span>
+        <span>
+          结点 <b>{tapCount}</b>
+        </span>
+        <span>
+          网络 <b>{netlist.nets.length}</b>
         </span>        <span>
           网格 <b>{GRID}px</b>
         </span>
+        {geometryStatus !== "none" && (
+          <span
+            className={geometryStatus === "mismatch" ? "rlc-status-warn" : undefined}
+            data-testid="rlc-geometry-status"
+          >
+            {GEOMETRY_LABEL[geometryStatus]}
+          </span>
+        )}
+        {geometryStatus === "mismatch" && (
+          <button className="rlc-btn rlc-btn-mini" onClick={reroute}>
+            重新布线
+          </button>
+        )}
         <span>
           避障 <b>{avoidWires ? "开" : "关"}</b>
         </span>

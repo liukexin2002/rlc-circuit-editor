@@ -122,3 +122,6 @@ email-signature.html
 
 # Local QA test-report artifacts (test-report skill)
 test-reports/
+
+# Vitest JSON reporter output (local diagnostics)
+.zwork-vitest.json

@@ -1,0 +1,391 @@
+{
+  "format": "rlc-schematic-netlist/2",
+  "generator": {
+    "app": "rlc-editor",
+    "version": "2.0.0",
+    "routing": "oarsmt-tap/1"
+  },
+  "frequency": {
+    "start": 0.1,
+    "stop": 10,
+    "npoints": 1001,
+    "unit": "GHz"
+  },
+  "connections": [
+    [
+      [
+        "L1",
+        0
+      ],
+      [
+        "RIN",
+        1
+      ]
+    ],
+    [
+      [
+        "C1",
+        0
+      ],
+      [
+        "C2",
+        0
+      ],
+      [
+        "L1",
+        1
+      ],
+      [
+        "ROUT",
+        0
+      ]
+    ],
+    [
+      [
+        "C1",
+        1
+      ],
+      [
+        "C2",
+        1
+      ],
+      [
+        "GND1",
+        0
+      ]
+    ],
+    [
+      [
+        "PORT1",
+        0
+      ],
+      [
+        "RIN",
+        0
+      ]
+    ],
+    [
+      [
+        "PORT2",
+        0
+      ],
+      [
+        "ROUT",
+        1
+      ]
+    ]
+  ],
+  "networks": [
+    {
+      "name": "RIN",
+      "kind": "resistor",
+      "value": 50,
+      "value_text": "50"
+    },
+    {
+      "name": "L1",
+      "kind": "inductor",
+      "value": 8.893e-9,
+      "value_text": "8.893nH"
+    },
+    {
+      "name": "ROUT",
+      "kind": "resistor",
+      "value": 50,
+      "value_text": "50"
+    },
+    {
+      "name": "C1",
+      "kind": "capacitor",
+      "value": 3.222e-12,
+      "value_text": "3.222pF"
+    },
+    {
+      "name": "C2",
+      "kind": "capacitor",
+      "value": 8.225e-11,
+      "value_text": "82.25pF"
+    },
+    {
+      "name": "PORT1",
+      "kind": "port",
+      "z0": 50
+    },
+    {
+      "name": "PORT2",
+      "kind": "port",
+      "z0": 50
+    },
+    {
+      "name": "GND1",
+      "kind": "ground"
+    }
+  ],
+  "schematic": {
+    "components": [
+      {
+        "id": "n1",
+        "name": "RIN",
+        "kind": "resistor",
+        "x": 160,
+        "y": 320,
+        "rotation": 0,
+        "value_text": "50"
+      },
+      {
+        "id": "n2",
+        "name": "L1",
+        "kind": "inductor",
+        "x": 640,
+        "y": 320,
+        "rotation": 0,
+        "value_text": "8.893nH"
+      },
+      {
+        "id": "n3",
+        "name": "ROUT",
+        "kind": "resistor",
+        "x": 1280,
+        "y": 320,
+        "rotation": 0,
+        "value_text": "50"
+      },
+      {
+        "id": "n4",
+        "name": "C1",
+        "kind": "capacitor",
+        "x": 480,
+        "y": 720,
+        "rotation": 90,
+        "value_text": "3.222pF"
+      },
+      {
+        "id": "n5",
+        "name": "C2",
+        "kind": "capacitor",
+        "x": 960,
+        "y": 720,
+        "rotation": 90,
+        "value_text": "82.25pF"
+      }
+    ],
+    "wires": [
+      {
+        "id": "e1",
+        "from": {
+          "kind": "pin",
+          "componentId": "n1",
+          "pinId": "p1"
+        },
+        "to": {
+          "kind": "pin",
+          "componentId": "n2",
+          "pinId": "p0"
+        },
+        "waypoints": [
+          {
+            "x": 192,
+            "y": 320
+          },
+          {
+            "x": 608,
+            "y": 320
+          }
+        ],
+        "quality": "clean"
+      },
+      {
+        "id": "e2",
+        "from": {
+          "kind": "pin",
+          "componentId": "n2",
+          "pinId": "p1"
+        },
+        "to": {
+          "kind": "pin",
+          "componentId": "n3",
+          "pinId": "p0"
+        },
+        "waypoints": [
+          {
+            "x": 672,
+            "y": 320
+          },
+          {
+            "x": 1248,
+            "y": 320
+          }
+        ],
+        "quality": "clean"
+      },
+      {
+        "id": "e3",
+        "from": {
+          "kind": "pin",
+          "componentId": "n4",
+          "pinId": "p0"
+        },
+        "to": {
+          "kind": "tap",
+          "edgeId": "e2",
+          "x": 480,
+          "y": 320
+        },
+        "waypoints": [
+          {
+            "x": 480,
+            "y": 688
+          },
+          {
+            "x": 480,
+            "y": 400
+          },
+          {
+            "x": 688,
+            "y": 400
+          },
+          {
+            "x": 688,
+            "y": 320
+          }
+        ],
+        "quality": "tight"
+      },
+      {
+        "id": "e4",
+        "from": {
+          "kind": "pin",
+          "componentId": "n5",
+          "pinId": "p0"
+        },
+        "to": {
+          "kind": "tap",
+          "edgeId": "e2",
+          "x": 960,
+          "y": 320
+        },
+        "waypoints": [
+          {
+            "x": 960,
+            "y": 688
+          },
+          {
+            "x": 960,
+            "y": 320
+          }
+        ],
+        "quality": "clean"
+      },
+      {
+        "id": "e5",
+        "from": {
+          "kind": "pin",
+          "componentId": "n4",
+          "pinId": "p1"
+        },
+        "to": {
+          "kind": "pin",
+          "componentId": "n5",
+          "pinId": "p1"
+        },
+        "waypoints": [
+          {
+            "x": 480,
+            "y": 752
+          },
+          {
+            "x": 480,
+            "y": 784
+          },
+          {
+            "x": 960,
+            "y": 784
+          },
+          {
+            "x": 960,
+            "y": 752
+          }
+        ],
+        "quality": "clean"
+      }
+    ],
+    "ports": [
+      "n1.p0",
+      "n3.p1"
+    ],
+    "grounds": [
+      "n4.p1"
+    ],
+    "avoidWires": true
+  },
+  "nets": [
+    {
+      "name": "N1",
+      "terminals": [
+        "n1.p1",
+        "n2.p0"
+      ],
+      "wires": [
+        "e1"
+      ],
+      "taps": [],
+      "length": 416
+    },
+    {
+      "name": "N2",
+      "terminals": [
+        "n2.p1",
+        "n3.p0",
+        "n4.p0",
+        "n5.p0"
+      ],
+      "wires": [
+        "e2",
+        "e3",
+        "e4"
+      ],
+      "taps": [
+        {
+          "wireId": "e3",
+          "hostWireId": "e2"
+        },
+        {
+          "wireId": "e4",
+          "hostWireId": "e2"
+        }
+      ],
+      "length": 1520
+    },
+    {
+      "name": "N3",
+      "terminals": [
+        "n4.p1",
+        "n5.p1"
+      ],
+      "wires": [
+        "e5"
+      ],
+      "taps": [],
+      "length": 544
+    },
+    {
+      "name": "N4",
+      "terminals": [
+        "n1.p0"
+      ],
+      "wires": [],
+      "taps": [],
+      "length": 0
+    },
+    {
+      "name": "N5",
+      "terminals": [
+        "n3.p1"
+      ],
+      "wires": [],
+      "taps": [],
+      "length": 0
+    }
+  ],
+  "notes": []
+}

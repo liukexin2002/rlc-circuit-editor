@@ -29,6 +29,7 @@ import {
 } from "../../rlc/rlcRouting";
 import {
   emptyRlcDoc,
+  isPinEndpoint,
   makeComponent,
   obstacleRect,
   pinPos,
@@ -60,8 +61,8 @@ function connect(
 ): RlcEdge {
   const edge: RlcEdge = {
     id: `e${doc.nextEdgeSeq}`,
-    from: { componentId: a.id, pinId: aPin },
-    to: { componentId: b.id, pinId: bPin },
+    from: { kind: "pin", componentId: a.id, pinId: aPin },
+    to: { kind: "pin", componentId: b.id, pinId: bPin },
   };
   doc.nextEdgeSeq++;
   doc.edges.push(edge);
@@ -77,10 +78,15 @@ function expectWireRules(doc: RlcDoc, edge: RlcEdge, waypoints: { x: number; y: 
   expect(crossedObstacles(doc, edge, waypoints)).toEqual([]);
 
   // R2 + R4: both ends anchored on the true pins and leaving along the pin facing.
-  const from = doc.components.find((c) => c.id === edge.from.componentId)!;
-  const to = doc.components.find((c) => c.id === edge.to.componentId)!;
-  expect(waypoints[0]).toEqual(pinPos(from, edge.from.pinId));
-  expect(waypoints[waypoints.length - 1]).toEqual(pinPos(to, edge.to.pinId));
+  const fromEnd = edge.from;
+  const toEnd = edge.to;
+  if (!isPinEndpoint(fromEnd) || !isPinEndpoint(toEnd)) {
+    throw new Error("expectWireRules is for pin-to-pin wires");
+  }
+  const from = doc.components.find((c) => c.id === fromEnd.componentId)!;
+  const to = doc.components.find((c) => c.id === toEnd.componentId)!;
+  expect(waypoints[0]).toEqual(pinPos(from, fromEnd.pinId));
+  expect(waypoints[waypoints.length - 1]).toEqual(pinPos(to, toEnd.pinId));
 
   const stubs = endStubLengths(waypoints);
   expect(stubs.start, "source stub must clear the pin by a full cell").toBeGreaterThanOrEqual(GRID);
@@ -88,8 +94,8 @@ function expectWireRules(doc: RlcDoc, edge: RlcEdge, waypoints: { x: number; y: 
 
   const dirOf = (a: { x: number; y: number }, b: { x: number; y: number }) =>
     Math.abs(b.x - a.x) > Math.abs(b.y - a.y) ? "h" : "v";
-  const sSide = pinSide(from, edge.from.pinId);
-  const eSide = pinSide(to, edge.to.pinId);
+  const sSide = pinSide(from, fromEnd.pinId);
+  const eSide = pinSide(to, toEnd.pinId);
   expect(dirOf(waypoints[0], waypoints[1]), `source pin ${sSide} exit axis`).toBe(
     sSide === "left" || sSide === "right" ? "h" : "v",
   );

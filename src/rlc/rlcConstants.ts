@@ -11,6 +11,40 @@
 /** Canvas snap grid and routing cell size, in pixels. */
 export const GRID = 16;
 
+/** Document schema version this build writes. v2 adds taps + stored geometry. */
+export const DOC_VERSION = 2;
+
+/** Editor version shown in the toolbar and stamped into exported netlists. */
+export const EDITOR_VERSION = "2.0.0";
+
+/**
+ * Routing-model version stamp written into exported files. A file whose stamp differs was
+ * produced by different routing rules, so a re-route may legitimately differ; the loader
+ * records that instead of pretending the geometry is reproducible.
+ */
+export const ROUTING_MODEL = "oarsmt-tap/1";
+
+/**
+ * Click/tap tolerance for hitting a wire, in SCREEN pixels. Converted to world units by
+ * dividing by the current zoom, so grabbing a wire feels the same at every scale.
+ */
+export const WIRE_HIT_PX = 8;
+
+/**
+ * Largest number of candidate junction points evaluated when solving a tap.
+ *
+ * Candidates are visited nearest-first, and the search stops as soon as no remaining
+ * candidate could improve on the best path found — so this bounds worst-case work on a very
+ * long host wire without changing the result in the common case.
+ */
+export const TAP_MAX_CANDIDATES = 96;
+
+/** Radius of the junction dot drawn where a tap meets its host wire, in world pixels. */
+export const TAP_DOT_R = 3.2;
+
+/** Distance a tap keeps from its host wire's own endpoints, in cells. */
+export const TAP_ENDPOINT_INSET = 1;
+
 /** Distance between the two pin centers of one component (4 cells). */
 export const SYMBOL_SPAN = 4 * GRID;
 

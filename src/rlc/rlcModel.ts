@@ -11,9 +11,26 @@
  *
  * Coordinate system: world pixels, y grows downward (SVG convention).
  * All component origins and all pin positions land on the GRID lattice.
+ *
+ * ── DOCUMENT VERSION 2 ───────────────────────────────────────────────────────
+ * v2 adds two things v1 could not express:
+ *
+ *   a) WIRE-TO-WIRE TAPS. A wire endpoint is now either a component pin or a point on
+ *      another wire (`kind: "tap"`). That point is a Steiner point of the resulting
+ *      rectilinear tree: it is where a newly grown branch meets the existing wire, so the
+ *      new wire is as short as the geometry allows.
+ *
+ *   b) STORED GEOMETRY. Every wire's solved polyline is kept in `geometry`. This is what
+ *      makes reopening a saved file pixel-identical instead of a re-route that merely
+ *      "should" look the same: the canvas renders the stored polyline, and a re-route is
+ *      only ever used to CHECK it (a mismatch is reported, never silently redrawn).
+ *
+ * Migration from v1 is total and lossless for everything v1 could express: v1 endpoints
+ * become `kind: "pin"`, and a v1 document carries no `geometry`, so the editor solves each
+ * wire once on open and records it. Nothing about a v1 document's appearance changes.
  */
 
-import { GRID, SYMBOL_SPAN, SYMBOL_BODY_H, PIN_STUB } from "./rlcConstants";
+import { GRID, SYMBOL_SPAN, SYMBOL_BODY_H, PIN_STUB, DOC_VERSION } from "./rlcConstants";
 
 export type RlcKind = "resistor" | "inductor" | "capacitor";
 
@@ -36,7 +53,7 @@ export interface Rect {
 }
 
 export interface RlcPin {
-  /** Pin id as stored in an edge endpoint (React Flow handle id). */
+  /** Pin id as stored in an edge endpoint. */
   id: "p0" | "p1";
   /** Which end of the symbol body this pin belongs to, in LOCAL space (pre-rotation). */
   localEnd: -1 | 1;
@@ -49,16 +66,36 @@ export interface RlcComponent {
   x: number;
   y: number;
   rotation: RlcRotation;
-  /** Reference designator, e.g. R1 / L2 / C3. */
+  /** Reference designator, e.g. R1 / L2 / C3. Doubles as the network name in the netlist. */
   label: string;
   /** Value text, e.g. 10k / 100uH / 100nF. */
   value: string;
 }
 
-export interface RlcEdgeEndpoint {
+/** A wire end anchored on a component pin. */
+export interface RlcPinEndpoint {
+  kind: "pin";
   componentId: string;
   pinId: RlcPin["id"];
 }
+
+/**
+ * A wire end anchored on another wire — the Steiner point of an incremental branch.
+ *
+ * `x`/`y` is the solved junction. It is a real stored coordinate (not a fraction along the
+ * host) because that is what makes reopening a file reproducible; the router still PROJECTS
+ * it onto the host's current polyline whenever it routes, so if the host later moves the
+ * junction follows it rather than floating in space.
+ */
+export interface RlcTapEndpoint {
+  kind: "tap";
+  /** The wire this endpoint taps. */
+  edgeId: string;
+  x: number;
+  y: number;
+}
+
+export type RlcEdgeEndpoint = RlcPinEndpoint | RlcTapEndpoint;
 
 export interface RlcEdge {
   id: string;
@@ -66,8 +103,15 @@ export interface RlcEdge {
   to: RlcEdgeEndpoint;
 }
 
+/** Solved geometry for one wire, keyed by edge id. */
+export interface RlcWireGeometry {
+  waypoints: Pt[];
+  /** Quality tier the solve achieved, so a reopened file reports the same badge as when saved. */
+  quality: string;
+}
+
 export interface RlcDoc {
-  version: 1;
+  version: typeof DOC_VERSION;
   components: RlcComponent[];
   edges: RlcEdge[];
   /** Monotonic counters — never reused, so undo/redo cannot alias ids. */
@@ -75,16 +119,40 @@ export interface RlcDoc {
   nextEdgeSeq: number;
   /** Per-kind reference designator counters. */
   labelSeq: Record<RlcKind, number>;
+  /**
+   * Solved polylines, keyed by edge id. Present so a reopened document renders EXACTLY what
+   * was saved. Absent/partial geometry is legal (hand-written documents): those wires get
+   * solved once on open, and the caller is told that a solve happened.
+   */
+  geometry: Record<string, RlcWireGeometry>;
+  /**
+   * Ports and grounds are declarations about the CIRCUIT, not about the drawing, so they are
+   * anchored to stable pin ids rather than to derived net names — net ids can be renumbered
+   * by unrelated edits, which would silently move a port to a different node.
+   */
+  ports: string[];
+  grounds: string[];
+  /** Whether wire-vs-wire separation was on when the document was saved. */
+  avoidWires: boolean;
+}
+
+/** Stable key for a pin, used by the port/ground declarations. */
+export function pinKey(componentId: string, pinId: RlcPin["id"]): string {
+  return `${componentId}.${pinId}`;
 }
 
 export function emptyRlcDoc(): RlcDoc {
   return {
-    version: 1,
+    version: DOC_VERSION,
     components: [],
     edges: [],
     nextComponentSeq: 1,
     nextEdgeSeq: 1,
     labelSeq: { resistor: 0, inductor: 0, capacitor: 0 },
+    geometry: {},
+    ports: [],
+    grounds: [],
+    avoidWires: true,
   };
 }
 
@@ -111,6 +179,81 @@ export const RLC_PINS: readonly RlcPin[] = [
   { id: "p0", localEnd: -1 },
   { id: "p1", localEnd: 1 },
 ] as const;
+
+// ── Endpoint helpers ─────────────────────────────────────────────────────────
+
+export function isPinEndpoint(e: RlcEdgeEndpoint): e is RlcPinEndpoint {
+  return e.kind === "pin";
+}
+
+export function isTapEndpoint(e: RlcEdgeEndpoint): e is RlcTapEndpoint {
+  return e.kind === "tap";
+}
+
+/** The other end of an edge. */
+export function otherEndpoint(edge: RlcEdge, end: RlcEdgeEndpoint): RlcEdgeEndpoint {
+  return edge.from === end || (isPinEndpoint(edge.from) && isPinEndpoint(end) &&
+    edge.from.componentId === end.componentId && edge.from.pinId === end.pinId)
+    ? edge.to
+    : edge.from;
+}
+
+/**
+ * Delete an edge, cascading to every wire that taps it.
+ *
+ * A tap without its host would be a junction pointing at nothing, so the cascade is
+ * transitive: removing e1 removes e2 (taps e1), which removes e3 (taps e2), and so on.
+ * Pure, so the cascade is unit-testable without touching a store.
+ */
+export function removeEdgesCascade(doc: RlcDoc, edgeIds: readonly string[]): RlcDoc {
+  const doomed = new Set(edgeIds);
+  // Fixpoint: keep absorbing wires that tap something already doomed.
+  for (;;) {
+    let grew = false;
+    for (const e of doc.edges) {
+      if (doomed.has(e.id)) continue;
+      for (const end of [e.from, e.to]) {
+        if (isTapEndpoint(end) && doomed.has(end.edgeId)) {
+          doomed.add(e.id);
+          grew = true;
+          break;
+        }
+      }
+    }
+    if (!grew) break;
+  }
+  const geometry: Record<string, RlcWireGeometry> = {};
+  for (const [id, g] of Object.entries(doc.geometry)) {
+    if (!doomed.has(id)) geometry[id] = g;
+  }
+  return {
+    ...doc,
+    edges: doc.edges.filter((e) => !doomed.has(e.id)),
+    geometry,
+  };
+}
+
+/** Delete a component and every wire attached to it (directly or through a tap cascade). */
+export function removeComponentsCascade(doc: RlcDoc, componentIds: readonly string[]): RlcDoc {
+  const doomedComponents = new Set(componentIds);
+  const doomedEdges = doc.edges
+    .filter(
+      (e) =>
+        (isPinEndpoint(e.from) && doomedComponents.has(e.from.componentId)) ||
+        (isPinEndpoint(e.to) && doomedComponents.has(e.to.componentId)),
+    )
+    .map((e) => e.id);
+  const pruned = removeEdgesCascade(doc, doomedEdges);
+  const dead = new Set(componentIds);
+  const ports = doc.ports.filter((p) => !dead.has(p.split(".")[0]));
+  const grounds = doc.grounds.filter((p) => !dead.has(p.split(".")[0]));
+  return {
+    ...pruned,
+    components: pruned.components.filter((c) => !dead.has(c.id)),
+    ports,
+    grounds,
+  };
+}
 
 // ── Rotation primitives (screen space, y down) ────────────────────────────────
 

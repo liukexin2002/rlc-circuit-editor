@@ -2,12 +2,16 @@
  * RLC editor canvas.
  *
  * Plain SVG, no diagram library: the interaction surface this editor needs is small
- * (drag a part, click pin→pin to wire, pan/zoom), and owning the coordinate math is what
- * lets the wire geometry, the hit tests and the routing grid all agree exactly.
+ * (drag a part, click pin→pin to wire, click a pin then a wire to TAP it, pan/zoom), and
+ * owning the coordinate math is what lets the wire geometry, the hit tests and the routing
+ * grid all agree exactly.
  *
  * Interaction contract:
  *   - drag a part body            → move (snapped to the lattice), wires re-route live
  *   - click a pin, then another   → connect (ESC or a click on empty canvas cancels)
+ *   - click a pin, then a WIRE    → TAP it: a Steiner point is solved on that wire and the
+ *                                   branch is drawn from the pin to it. The wire under the
+ *                                   cursor highlights and the junction is previewed.
  *   - click a part / wire         → select; Delete removes it (parts cascade to wires)
  *   - R / Shift+R                  → rotate selection by +90° / −90°
  *   - middle-drag or space-drag    → pan; wheel or +/− zooms
@@ -16,8 +20,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pinPos, type Pt, type RlcComponent } from "./rlcModel";
 import { labelAnchor, symbolGeometry } from "./rlcSymbols";
-import { docBounds } from "./rlcGeometry";
-import { GRID } from "./rlcConstants";
+import { distToSegment, docBounds } from "./rlcGeometry";
+import { GRID, TAP_DOT_R, WIRE_HIT_PX } from "./rlcConstants";
 import { useRlcStore } from "./rlcStore";
 import "./rlcEditorStyles.css";
 
@@ -30,6 +34,7 @@ const PIN_R = 3.5;
 const WIRE_STROKE: Record<string, string> = {
   clean: WIRE_COLOR,
   tight: WIRE_TIGHT,
+  crowded: WIRE_TIGHT,
   escape: WIRE_ESCAPE,
 };
 
@@ -59,10 +64,15 @@ export function RlcEditorCanvas() {
   const startWire = useRlcStore((s) => s.startWire);
   const updatePreview = useRlcStore((s) => s.updatePreview);
   const completeWire = useRlcStore((s) => s.completeWire);
+  const completeTap = useRlcStore((s) => s.completeTap);
   const cancelWire = useRlcStore((s) => s.cancelWire);
   const endInteraction = useRlcStore((s) => s.endInteraction);
   const undo = useRlcStore((s) => s.undo);
   const redo = useRlcStore((s) => s.redo);
+  const hoverWireId = useRlcStore((s) => s.hoverWireId);
+  const tapSolution = useRlcStore((s) => s.tapSolution);
+  const tapError = useRlcStore((s) => s.tapError);
+  const setHoverWire = useRlcStore((s) => s.setHoverWire);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
@@ -72,6 +82,33 @@ export function RlcEditorCanvas() {
     | null
   >(null);
   const [dropKind, setDropKind] = useState<string | null>(null);
+
+  /**
+   * Which wire is under the cursor, in WORLD space, or null.
+   *
+   * The tolerance is a screen distance divided by the zoom, so grabbing a wire feels equally
+   * easy at every scale. Only the closest wire within tolerance wins, which matters where
+   * wires run close together.
+   */
+  const wireAt = useCallback(
+    (world: Pt): string | null => {
+      const tol = WIRE_HIT_PX / view.k;
+      let bestId: string | null = null;
+      let bestD = Infinity;
+      for (const [id, r] of Object.entries(routes)) {
+        const pts = r.waypoints;
+        for (let i = 1; i < pts.length; i++) {
+          const d = distToSegment(world, pts[i - 1], pts[i]);
+          if (d <= tol && d < bestD) {
+            bestD = d;
+            bestId = id;
+          }
+        }
+      }
+      return bestId;
+    },
+    [routes, view.k],
+  );
 
   // ── Coordinate conversion ─────────────────────────────────────────────────
 
@@ -193,11 +230,12 @@ export function RlcEditorCanvas() {
         return;
       }
 
-      // A wire → select it (delete is then available from the panel or Delete key).
+      // A wire → either TAP it (when a pin is pending) or select it.
       if (edgeId && e.button === 0) {
         e.stopPropagation();
         if (pendingPin) {
-          cancelWire();
+          const ok = completeTap(edgeId);
+          if (!ok) cancelWire();
         } else {
           select("edge", edgeId);
         }
@@ -238,13 +276,21 @@ export function RlcEditorCanvas() {
         originY: view.y,
       };
     },
-    [beginInteraction, cancelWire, doc.components, completeWire, pendingPin, select, startWire, toWorld, updatePreview, view.x, view.y],
+    [beginInteraction, cancelWire, completeTap, doc.components, completeWire, pendingPin, select, startWire, toWorld, updatePreview, view.x, view.y],
   );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<SVGSVGElement>) => {
       const world = toWorld(e.clientX, e.clientY);
-      if (pendingPin) updatePreview(world);
+      if (pendingPin) {
+        updatePreview(world);
+        // While a pin is pending, hovering a wire is a TAP gesture: highlight the wire and
+        // show where the junction would land. The solver decides the point, not the cursor,
+        // so the highlight must not depend on the exact pixel under the pointer.
+        setHoverWire(wireAt(world));
+      } else if (hoverWireId) {
+        setHoverWire(null);
+      }
       const drag = dragRef.current;
       if (!drag) return;
       if (drag.kind === "pan") {
@@ -256,7 +302,7 @@ export function RlcEditorCanvas() {
       drag.moved = true;
       moveComponent(drag.id, world.x - drag.dx, world.y - drag.dy, { transient: true });
     },
-    [moveComponent, pendingPin, toWorld, updatePreview],
+    [hoverWireId, moveComponent, pendingPin, setHoverWire, toWorld, updatePreview, wireAt],
   );
 
   const endDrag = useCallback(
@@ -440,30 +486,63 @@ export function RlcEditorCanvas() {
     const r = routes[edgeId];
     if (!r) return null;
     const isSelected = selected === "edge" && selectedId === edgeId;
+    const isHovered = hoverWireId === edgeId;
+    const edge = doc.edges.find((e) => e.id === edgeId);
+    const taps = edge
+      ? [edge.from, edge.to].filter((x): x is Extract<typeof x, { kind: "tap" }> => x.kind === "tap")
+      : [];
     return (
       <g key={edgeId}>
         <path d={r.svgPath} className="rlc-wire-hit" data-edge={edgeId} />
         <path
           d={r.svgPath}
-          className={`rlc-wire${isSelected ? " rlc-wire-selected" : ""}`}
+          className={`rlc-wire${isSelected ? " rlc-wire-selected" : ""}${
+            isHovered ? " rlc-wire-hovered" : ""
+          }`}
           style={r.quality === "clean" ? undefined : { stroke: WIRE_STROKE[r.quality] }}
+          data-quality={r.quality}
         />
+        {/* A tap is a junction, so it is drawn as a solid node on the host wire. */}
+        {taps.map((t, i) => (
+          <circle key={`${edgeId}-tap-${i}`} cx={t.x} cy={t.y} r={TAP_DOT_R} className="rlc-junction" />
+        ))}
       </g>
     );
   };
 
+  /**
+   * In-flight preview.
+   *
+   * With a wire hovered the preview shows the ACTUAL solved branch — same polyline the commit
+   * will store — so what you see is what you get. Otherwise it falls back to a straight
+   * rubber-band line to the cursor.
+   */
   const preview = useMemo(() => {
     if (!pendingPin || !previewPoint) return null;
     const comp = doc.components.find((c) => c.id === pendingPin.componentId);
     if (!comp) return null;
     const p = pinPos(comp, pendingPin.pinId);
+    if (tapSolution) {
+      return (
+        <g className="rlc-preview" pointerEvents="none" data-testid="rlc-tap-preview">
+          <path d={tapSolution.svgPath} className="rlc-preview-wire" />
+          <circle
+            cx={tapSolution.junction.x}
+            cy={tapSolution.junction.y}
+            r={TAP_DOT_R + 1.4}
+            className="rlc-preview-junction"
+            data-testid="rlc-junction-preview"
+          />
+        </g>
+      );
+    }
     return (
       <g className="rlc-preview" pointerEvents="none">
         <line x1={p.x} y1={p.y} x2={previewPoint.x} y2={previewPoint.y} className="rlc-preview-line" />
         <circle cx={previewPoint.x} cy={previewPoint.y} r={3} className="rlc-preview-dot" />
       </g>
     );
-  }, [doc.components, pendingPin, previewPoint]);
+  }, [doc.components, pendingPin, previewPoint, tapSolution]);
 
   return (
     <svg
@@ -500,7 +579,11 @@ export function RlcEditorCanvas() {
         fill={showGrid ? "url(#rlc-grid)" : "var(--rlc-bg)"}
         className="rlc-bg"
       />
-      <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+      <g
+        transform={`translate(${view.x} ${view.y}) scale(${view.k})`}
+        className="rlc-viewport"
+        data-testid="rlc-viewport"
+      >
         {doc.edges.map((e) => renderWire(e.id))}
         {doc.components.map((c) => renderComponent(c))}
         {doc.components.map((c) => renderPins(c))}
@@ -511,6 +594,19 @@ export function RlcEditorCanvas() {
           <rect x={0} y={0} width={252} height={26} rx={4} className="rlc-badge-bg" />
           <text x={10} y={17} className="rlc-badge-text">
             {`⚠ ${degradedCount} 条连线未完全避开元件（已保持正交）`}
+          </text>
+        </g>
+      )}
+      {tapError && pendingPin && (
+        <g
+          className="rlc-badge"
+          transform={`translate(12 ${degradedCount > 0 ? 46 : 12})`}
+          pointerEvents="none"
+          data-testid="rlc-tap-error"
+        >
+          <rect x={0} y={0} width={330} height={26} rx={4} className="rlc-badge-bg" />
+          <text x={10} y={17} className="rlc-badge-text">
+            {tapError}
           </text>
         </g>
       )}
