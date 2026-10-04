@@ -1,0 +1,21 @@
+{
+  "deviceOverlapCount": 0,
+  "endpointBodyCrossings": 0,
+  "nonHorizontalArrivals": 0,
+  "nonOrthogonalSegments": 0,
+  "sharedParallelSegments": 6,
+  "crossingPairs": 0,
+  "weavingPairs": 0,
+  "crossTypeSepViolations": 0,
+  "smearPairs": 0,
+  "backwardSegments": 0,
+  "turnsTotal": 14,
+  "turnsMax": 4,
+  "detourRatioMax": 1.182,
+  "detourRatioMean": 1.052,
+  "fallbackCount": 0,
+  "unroutedEdges": 0,
+  "channelDensity": 4,
+  "distinctTrackXs": 3,
+  "doglegCount": 0
+}

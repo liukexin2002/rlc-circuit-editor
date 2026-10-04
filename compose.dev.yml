@@ -1,0 +1,19 @@
+services:
+  easyschematic:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - easyschematic-dev:/app
+    environment:
+      REPO_URL: https://github.com/duremovich/EasySchematic.git
+      BRANCH: master
+    env_file:
+      - path: .env
+        required: false
+    restart: "no"
+
+volumes:
+  easyschematic-dev:

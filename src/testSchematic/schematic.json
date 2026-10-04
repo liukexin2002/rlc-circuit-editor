@@ -1,0 +1,1839 @@
+{
+  "version": 43,
+  "name": "EasySchematic Test Fixture",
+  "nodes": [
+    {
+      "id": "room-1",
+      "type": "room",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "main Hall",
+        "locked": true
+      },
+      "style": {
+        "width": 1232,
+        "height": 800
+      },
+      "zIndex": -1,
+      "measured": {
+        "width": 1232,
+        "height": 800
+      }
+    },
+    {
+      "id": "device-1",
+      "type": "device",
+      "position": {
+        "x": 32,
+        "y": 96
+      },
+      "parentId": "room-1",
+      "measured": {
+        "width": 176,
+        "height": 96
+      },
+      "data": {
+        "label": "Fiber TX — LC",
+        "ports": [
+          {
+            "id": "lc-out-1",
+            "label": "LC Out 1",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "lc"
+          },
+          {
+            "id": "lc-out-2",
+            "label": "LC Out 2",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "lc"
+          },
+          {
+            "id": "lc-in-1",
+            "label": "LC In 1",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "lc"
+          },
+          {
+            "id": "lc-in-2",
+            "label": "LC In 2",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "lc"
+          }
+        ],
+        "deviceType": "converter",
+        "model": "Fiber TX — LC",
+        "manufacturer": "Fibrelink",
+        "modelNumber": "FX-LC4",
+        "powerDrawW": 18,
+        "unitCost": 450,
+        "serialNumber": "TS-LC-001",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          },
+          {
+            "text": "{{modelNumber}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-2",
+      "type": "device",
+      "position": {
+        "x": 32,
+        "y": 352
+      },
+      "parentId": "room-1",
+      "measured": {
+        "width": 176,
+        "height": 96
+      },
+      "data": {
+        "label": "ST Fiber Bulkhead",
+        "ports": [
+          {
+            "id": "st-in-1",
+            "label": "ST In 1",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "st"
+          },
+          {
+            "id": "st-out-1",
+            "label": "ST Out 1",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "st"
+          },
+          {
+            "id": "st-out-2",
+            "label": "ST Out 2",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "st"
+          }
+        ],
+        "deviceType": "patch-panel",
+        "model": "ST Fiber Bulkhead",
+        "manufacturer": "Fibrelink",
+        "modelNumber": "BK-ST2",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-3",
+      "type": "device",
+      "position": {
+        "x": 528,
+        "y": 96
+      },
+      "parentId": "room-1",
+      "measured": {
+        "width": 176,
+        "height": 96
+      },
+      "data": {
+        "label": "Fiber RX — SC",
+        "ports": [
+          {
+            "id": "sc-in-1",
+            "label": "SC In 1",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "sc"
+          },
+          {
+            "id": "sc-in-2",
+            "label": "SC In 2",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "sc"
+          },
+          {
+            "id": "sc-out-1",
+            "label": "SC Out 1",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "sc"
+          },
+          {
+            "id": "sc-out-2",
+            "label": "SC Out 2",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "sc"
+          }
+        ],
+        "deviceType": "converter",
+        "model": "Fiber RX — SC",
+        "manufacturer": "Fibrelink",
+        "modelNumber": "FX-SC4",
+        "powerDrawW": 18,
+        "unitCost": 450,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          },
+          {
+            "text": "{{modelNumber}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-4",
+      "type": "device",
+      "position": {
+        "x": 528,
+        "y": 352
+      },
+      "parentId": "room-1",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "opticalCON Stage Box",
+        "ports": [
+          {
+            "id": "optical-in-1",
+            "label": "opticalCON In 1",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "opticalcon"
+          },
+          {
+            "id": "optical-in-2",
+            "label": "opticalCON In 2",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "opticalcon"
+          },
+          {
+            "id": "optical-out-1",
+            "label": "opticalCON Out 1",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "opticalcon"
+          }
+        ],
+        "deviceType": "fiber-transmitter",
+        "model": "opticalCON Stage Box",
+        "manufacturer": "Fibrelink",
+        "modelNumber": "SB-OPT",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-5",
+      "type": "device",
+      "position": {
+        "x": 1024,
+        "y": 96
+      },
+      "parentId": "room-1",
+      "measured": {
+        "width": 176,
+        "height": 144
+      },
+      "data": {
+        "label": "Christie Griffyn 4K35-RGB Laser Projector (House Left)",
+        "ports": [
+          {
+            "id": "proj-hdmi-in",
+            "label": "HDMI In",
+            "signalType": "hdmi",
+            "direction": "input",
+            "connectorType": "hdmi"
+          },
+          {
+            "id": "proj-sdi-in",
+            "label": "SDI In",
+            "signalType": "sdi",
+            "direction": "input",
+            "connectorType": "bnc"
+          },
+          {
+            "id": "proj-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "edison"
+          }
+        ],
+        "deviceType": "projector",
+        "model": "Christie Griffyn 4K35-RGB Laser Projector (House Left)",
+        "shortName": "Griffyn 4K35",
+        "wrapLabel": true,
+        "manufacturer": "Christie",
+        "modelNumber": "Griffyn 4K35-RGB",
+        "powerDrawW": 1600,
+        "unitCost": 68000,
+        "auxiliaryData": [
+          {
+            "text": "{{manufacturer}}",
+            "position": "header"
+          },
+          {
+            "text": "{{modelNumber}}",
+            "position": "header"
+          },
+          {
+            "text": "{{powerDrawW}}",
+            "position": "footer"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-6",
+      "type": "device",
+      "position": {
+        "x": 1024,
+        "y": 400
+      },
+      "parentId": "room-1",
+      "measured": {
+        "width": 176,
+        "height": 96
+      },
+      "data": {
+        "label": "Amp",
+        "ports": [
+          {
+            "id": "amp-xlr-in-1",
+            "label": "XLR In 1",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "xlr-3"
+          },
+          {
+            "id": "amp-xlr-in-2",
+            "label": "XLR In 2",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "xlr-3"
+          },
+          {
+            "id": "amp-spk-out-1",
+            "label": "Spk Out 1",
+            "signalType": "speaker-level",
+            "direction": "output",
+            "connectorType": "speakon"
+          },
+          {
+            "id": "amp-spk-out-2",
+            "label": "Spk Out 2",
+            "signalType": "speaker-level",
+            "direction": "output",
+            "connectorType": "speakon"
+          },
+          {
+            "id": "amp-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          }
+        ],
+        "deviceType": "amplifier",
+        "model": "Amp",
+        "manufacturer": "Powersoft",
+        "modelNumber": "T604A",
+        "powerDrawW": 900,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-7",
+      "type": "device",
+      "position": {
+        "x": 1024,
+        "y": 656
+      },
+      "parentId": "room-1",
+      "measured": {
+        "width": 176,
+        "height": 96
+      },
+      "data": {
+        "label": "Confidence Monitor 32\"",
+        "ports": [
+          {
+            "id": "mon-hdmi-in",
+            "label": "HDMI In",
+            "signalType": "hdmi",
+            "direction": "input",
+            "connectorType": "hdmi"
+          },
+          {
+            "id": "mon-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "edison"
+          }
+        ],
+        "deviceType": "monitor",
+        "model": "Confidence Monitor 32\"",
+        "manufacturer": "TestCo",
+        "modelNumber": "CM-32",
+        "powerDrawW": 65,
+        "unitCost": 520,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          },
+          {
+            "text": "{{powerDrawW}}",
+            "position": "footer"
+          }
+        ]
+      }
+    },
+    {
+      "id": "room-2",
+      "type": "room",
+      "position": {
+        "x": 1424,
+        "y": 0
+      },
+      "data": {
+        "label": "BOH Rack Room",
+        "locked": true
+      },
+      "style": {
+        "width": 2224,
+        "height": 784
+      },
+      "zIndex": -1,
+      "measured": {
+        "width": 2224,
+        "height": 784
+      }
+    },
+    {
+      "id": "device-12",
+      "type": "device",
+      "position": {
+        "x": 32,
+        "y": 96
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "Powered Speaker (IEC) 1",
+        "ports": [
+          {
+            "id": "spk-iec-in",
+            "label": "IEC AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          },
+          {
+            "id": "spk-xlr-in",
+            "label": "XLR In",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "xlr-3"
+          }
+        ],
+        "deviceType": "speaker",
+        "model": "Powered Speaker (IEC)",
+        "baseLabel": "Powered Speaker (IEC)",
+        "manufacturer": "TestCo",
+        "modelNumber": "PS-12",
+        "powerDrawW": 300,
+        "unitCost": 1100,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-9",
+      "type": "device",
+      "position": {
+        "x": 32,
+        "y": 336
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 160
+      },
+      "data": {
+        "label": "Core Switch 48-Port",
+        "ports": [
+          {
+            "id": "sw-port-1",
+            "label": "Port 1",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45",
+            "networkConfig": {
+              "ip": "10.20.0.1",
+              "subnetMask": "255.255.255.0",
+              "gateway": "10.20.0.1",
+              "vlan": 20
+            }
+          },
+          {
+            "id": "sw-port-2",
+            "label": "Port 2",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45"
+          },
+          {
+            "id": "sw-port-3",
+            "label": "Port 3",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45"
+          },
+          {
+            "id": "sw-port-4",
+            "label": "Port 4",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45"
+          },
+          {
+            "id": "sw-uplink",
+            "label": "Uplink (SFP)",
+            "signalType": "fiber",
+            "direction": "bidirectional",
+            "connectorType": "lc"
+          },
+          {
+            "id": "sw-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          }
+        ],
+        "deviceType": "network-switch",
+        "model": "Core Switch 48-Port",
+        "manufacturer": "TestCo",
+        "modelNumber": "SW-48P",
+        "hostname": "core-sw",
+        "powerDrawW": 120,
+        "poeBudgetW": 370,
+        "unitCost": 2400,
+        "serialNumber": "TS-SW-001",
+        "dhcpServer": {
+          "enabled": true,
+          "rangeStart": "10.20.0.100",
+          "rangeEnd": "10.20.0.200",
+          "subnetMask": "255.255.255.0",
+          "gateway": "10.20.0.1"
+        },
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          },
+          {
+            "text": "{{hostname}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-13",
+      "type": "device",
+      "position": {
+        "x": 32,
+        "y": 656
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "Powered Speaker (IEC) 2",
+        "ports": [
+          {
+            "id": "spk2-iec-in",
+            "label": "IEC AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          },
+          {
+            "id": "spk2-xlr-in",
+            "label": "XLR In",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "xlr-3"
+          }
+        ],
+        "deviceType": "speaker",
+        "model": "Powered Speaker (IEC)",
+        "baseLabel": "Powered Speaker (IEC)",
+        "manufacturer": "TestCo",
+        "modelNumber": "PS-12",
+        "powerDrawW": 300,
+        "unitCost": 1100,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-11",
+      "type": "device",
+      "position": {
+        "x": 528,
+        "y": 96
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 112
+      },
+      "data": {
+        "label": "Rack UPS",
+        "ports": [
+          {
+            "id": "ups-iec-in",
+            "label": "IEC AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          },
+          {
+            "id": "ups-edison-out-1",
+            "label": "Edison Out 1",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "edison"
+          },
+          {
+            "id": "ups-edison-out-2",
+            "label": "Edison Out 2",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "edison"
+          },
+          {
+            "id": "ups-edison-out-3",
+            "label": "Edison Out 3",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "edison"
+          },
+          {
+            "id": "ups-iec-out-1",
+            "label": "IEC Out 1",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "iec"
+          }
+        ],
+        "deviceType": "power-distribution",
+        "model": "Rack UPS",
+        "manufacturer": "TestCo",
+        "modelNumber": "UPS-1500",
+        "powerCapacityW": 1500,
+        "voltage": "120V",
+        "unitCost": 890,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-10",
+      "type": "device",
+      "position": {
+        "x": 528,
+        "y": 368
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "USB Hub (USB-A)",
+        "ports": [
+          {
+            "id": "hub-usb-out-1",
+            "label": "USB-A Out 1",
+            "signalType": "usb",
+            "direction": "output",
+            "connectorType": "usb-a"
+          },
+          {
+            "id": "hub-usb-out-2",
+            "label": "USB-A Out 2",
+            "signalType": "usb",
+            "direction": "output",
+            "connectorType": "usb-a"
+          },
+          {
+            "id": "hub-usb-in",
+            "label": "USB-A In",
+            "signalType": "usb",
+            "direction": "input",
+            "connectorType": "usb-a"
+          }
+        ],
+        "deviceType": "usb",
+        "model": "USB Hub (USB-A)",
+        "manufacturer": "TestCo",
+        "modelNumber": "HUB-4A",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-14",
+      "type": "device",
+      "position": {
+        "x": 1024,
+        "y": 96
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "Utility Bar (Edison)",
+        "ports": [
+          {
+            "id": "bar-edison-in",
+            "label": "Edison In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "edison"
+          },
+          {
+            "id": "bar-edison-out-1",
+            "label": "Edison Out 1",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "edison"
+          },
+          {
+            "id": "bar-edison-out-2",
+            "label": "Edison Out 2",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "edison"
+          }
+        ],
+        "deviceType": "power-distribution",
+        "model": "Utility Bar (Edison)",
+        "manufacturer": "TestCo",
+        "modelNumber": "UB-6",
+        "powerCapacityW": 1800,
+        "voltage": "120V",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-8",
+      "type": "device",
+      "position": {
+        "x": 1024,
+        "y": 336
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 192
+      },
+      "data": {
+        "label": "PP-01",
+        "ports": [
+          {
+            "id": "pp-1",
+            "label": "1 — Cat6",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "rj45",
+            "rearConnectorType": "rj45",
+            "frontConnectorType": "rj45",
+            "rearGender": "female",
+            "frontGender": "female"
+          },
+          {
+            "id": "pp-2",
+            "label": "2 — etherCON",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "rj45",
+            "rearConnectorType": "ethercon",
+            "frontConnectorType": "rj45",
+            "rearGender": "female",
+            "frontGender": "female"
+          },
+          {
+            "id": "pp-3",
+            "label": "3 — BNC",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "bnc",
+            "rearConnectorType": "bnc",
+            "frontConnectorType": "bnc",
+            "rearGender": "female",
+            "frontGender": "female"
+          },
+          {
+            "id": "pp-4",
+            "label": "4 — XLR-3",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "xlr-3",
+            "rearConnectorType": "xlr-3",
+            "frontConnectorType": "xlr-3",
+            "rearGender": "female",
+            "frontGender": "male"
+          },
+          {
+            "id": "pp-5",
+            "label": "5 — LC Fiber",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "lc",
+            "rearConnectorType": "lc",
+            "frontConnectorType": "lc"
+          },
+          {
+            "id": "pp-6",
+            "label": "6 — TRS A",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "trs-quarter",
+            "rearConnectorType": "trs-quarter",
+            "frontConnectorType": "trs-quarter",
+            "normalledTo": "pp-7",
+            "normalling": "half"
+          },
+          {
+            "id": "pp-7",
+            "label": "7 — TRS B",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "trs-quarter",
+            "rearConnectorType": "trs-quarter",
+            "frontConnectorType": "trs-quarter"
+          },
+          {
+            "id": "pp-8",
+            "label": "8 — Phoenix",
+            "signalType": "custom",
+            "inheritsSignal": true,
+            "direction": "passthrough",
+            "connectorType": "phoenix",
+            "rearConnectorType": "terminal-block",
+            "frontConnectorType": "phoenix",
+            "rearGender": "female",
+            "frontGender": "male"
+          }
+        ],
+        "deviceType": "patch-panel",
+        "model": "PP-01",
+        "manufacturer": "TestCo",
+        "modelNumber": "PP-8U",
+        "unitCost": 240,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-22",
+      "type": "device",
+      "position": {
+        "x": 1520,
+        "y": 96
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "Euro Power Strip (Schuko)",
+        "ports": [
+          {
+            "id": "eustrip-schuko-in",
+            "label": "Schuko In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "schuko"
+          },
+          {
+            "id": "eustrip-schuko-out-1",
+            "label": "Schuko Out 1",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "schuko"
+          },
+          {
+            "id": "eustrip-schuko-out-2",
+            "label": "Schuko Out 2",
+            "signalType": "power",
+            "direction": "output",
+            "connectorType": "schuko"
+          }
+        ],
+        "deviceType": "power-distribution",
+        "model": "Euro Power Strip (Schuko)",
+        "manufacturer": "TestCo",
+        "modelNumber": "EPS-3",
+        "voltage": "230V",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-23",
+      "type": "device",
+      "position": {
+        "x": 2016,
+        "y": 96
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 64
+      },
+      "data": {
+        "label": "EU PSU (Europlug)",
+        "ports": [
+          {
+            "id": "eupsu-europlug-in",
+            "label": "Europlug AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "europlug"
+          }
+        ],
+        "deviceType": "power-supply",
+        "model": "EU PSU (Europlug)",
+        "manufacturer": "TestCo",
+        "modelNumber": "PSU-EU-65",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-24",
+      "type": "device",
+      "position": {
+        "x": 2016,
+        "y": 320
+      },
+      "parentId": "room-2",
+      "measured": {
+        "width": 176,
+        "height": 64
+      },
+      "data": {
+        "label": "UK Media Player (BS 1363)",
+        "ports": [
+          {
+            "id": "ukplayer-uk-in",
+            "label": "UK AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "uk-power"
+          },
+          {
+            "id": "ukplayer-hdmi-out",
+            "label": "HDMI Out",
+            "signalType": "hdmi",
+            "direction": "output",
+            "connectorType": "hdmi"
+          }
+        ],
+        "deviceType": "media-player",
+        "model": "UK Media Player (BS 1363)",
+        "manufacturer": "TestCo",
+        "modelNumber": "MP-UK-4K",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "room-3",
+      "type": "room",
+      "position": {
+        "x": 3840,
+        "y": 0
+      },
+      "data": {
+        "label": "TECH TABLE",
+        "locked": true
+      },
+      "style": {
+        "width": 736,
+        "height": 768
+      },
+      "zIndex": -1,
+      "measured": {
+        "width": 736,
+        "height": 768
+      }
+    },
+    {
+      "id": "device-15",
+      "type": "device",
+      "position": {
+        "x": 32,
+        "y": 96
+      },
+      "parentId": "room-3",
+      "measured": {
+        "width": 176,
+        "height": 112
+      },
+      "data": {
+        "label": "FOH Console",
+        "ports": [
+          {
+            "id": "foh-xlr-out-l",
+            "label": "XLR Out L",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "xlr-3"
+          },
+          {
+            "id": "foh-xlr-out-r",
+            "label": "XLR Out R",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "xlr-3"
+          },
+          {
+            "id": "foh-trs-in-1",
+            "label": "TRS In 1",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "trs-quarter"
+          },
+          {
+            "id": "foh-trs-in-2",
+            "label": "TRS In 2",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "trs-quarter"
+          },
+          {
+            "id": "foh-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          }
+        ],
+        "deviceType": "audio-mixer",
+        "model": "FOH Console",
+        "manufacturer": "TestCo",
+        "modelNumber": "MX-32",
+        "powerDrawW": 180,
+        "unitCost": 6400,
+        "serialNumber": "TS-MX-001",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          },
+          {
+            "text": "{{modelNumber}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-16",
+      "type": "device",
+      "position": {
+        "x": 32,
+        "y": 368
+      },
+      "parentId": "room-3",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "Combo Jack Box",
+        "ports": [
+          {
+            "id": "combo-in-1",
+            "label": "Combo In 1",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "combo-xlr-trs"
+          },
+          {
+            "id": "combo-in-2",
+            "label": "Combo In 2",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "combo-xlr-trs"
+          },
+          {
+            "id": "combo-xlr-out",
+            "label": "XLR Out",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "xlr-3"
+          },
+          {
+            "id": "combo-ts-out",
+            "label": "TS Out",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "ts-quarter"
+          }
+        ],
+        "deviceType": "stage-box",
+        "model": "Combo Jack Box",
+        "manufacturer": "TestCo",
+        "modelNumber": "CJB-4",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-17",
+      "type": "device",
+      "position": {
+        "x": 528,
+        "y": 96
+      },
+      "parentId": "room-3",
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "Playback Deck",
+        "ports": [
+          {
+            "id": "deck-trs-out-l",
+            "label": "TRS Out L",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "trs-quarter"
+          },
+          {
+            "id": "deck-trs-out-r",
+            "label": "TRS Out R",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "trs-quarter"
+          },
+          {
+            "id": "deck-xlr-in-1",
+            "label": "XLR In 1",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "xlr-3"
+          },
+          {
+            "id": "deck-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          }
+        ],
+        "deviceType": "media-player",
+        "model": "Playback Deck",
+        "manufacturer": "TestCo",
+        "modelNumber": "PB-2",
+        "powerDrawW": 90,
+        "isSpare": true,
+        "serialNumber": "TS-PB-002",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-18",
+      "type": "device",
+      "position": {
+        "x": 528,
+        "y": 336
+      },
+      "parentId": "room-3",
+      "measured": {
+        "width": 176,
+        "height": 96
+      },
+      "data": {
+        "label": "Designer Laptop",
+        "ports": [
+          {
+            "id": "laptop-usb-out",
+            "label": "USB-A",
+            "signalType": "usb",
+            "direction": "output",
+            "connectorType": "usb-a"
+          },
+          {
+            "id": "laptop-lan",
+            "label": "LAN",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45",
+            "networkConfig": {
+              "dhcp": true
+            }
+          },
+          {
+            "id": "laptop-hdmi-out",
+            "label": "HDMI Out",
+            "signalType": "hdmi",
+            "direction": "output",
+            "connectorType": "hdmi"
+          }
+        ],
+        "deviceType": "computer",
+        "model": "Designer Laptop",
+        "manufacturer": "TestCo",
+        "modelNumber": "LT-16",
+        "powerDrawW": 90,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-21",
+      "type": "device",
+      "position": {
+        "x": 528,
+        "y": 592
+      },
+      "parentId": "room-3",
+      "measured": {
+        "width": 176,
+        "height": 128
+      },
+      "data": {
+        "label": "BMD SDI→Audio 12G",
+        "ports": [
+          {
+            "id": "device-21-0",
+            "label": "SDI In",
+            "signalType": "sdi",
+            "direction": "input",
+            "connectorType": "bnc",
+            "templatePortId": "port-1823"
+          },
+          {
+            "id": "device-21-1",
+            "label": "SDI Loop",
+            "signalType": "sdi",
+            "direction": "output",
+            "connectorType": "bnc",
+            "templatePortId": "port-1824"
+          },
+          {
+            "id": "device-21-2",
+            "label": "Analog Out L",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "xlr-3",
+            "templatePortId": "port-1825"
+          },
+          {
+            "id": "device-21-3",
+            "label": "Analog Out R",
+            "signalType": "analog-audio",
+            "direction": "output",
+            "connectorType": "xlr-3",
+            "templatePortId": "port-1826"
+          },
+          {
+            "id": "device-21-4",
+            "label": "AES Out 1-2",
+            "signalType": "aes",
+            "direction": "output",
+            "connectorType": "xlr-3",
+            "templatePortId": "port-1827"
+          },
+          {
+            "id": "device-21-5",
+            "label": "AES Out 3-4",
+            "signalType": "aes",
+            "direction": "output",
+            "connectorType": "xlr-3",
+            "templatePortId": "port-1828"
+          },
+          {
+            "id": "device-21-6",
+            "label": "AC Power",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec",
+            "templatePortId": "port-1829"
+          },
+          {
+            "id": "device-21-7",
+            "label": "S/PDIF Out",
+            "signalType": "spdif",
+            "direction": "output",
+            "connectorType": "toslink",
+            "templatePortId": "port-1830"
+          }
+        ],
+        "deviceType": "audio-embedder",
+        "model": "BMD SDI→Audio 12G",
+        "baseLabel": "BMD SDI→Audio 12G",
+        "templateId": "c0a80101-0031-4000-8000-000000000049",
+        "manufacturer": "Blackmagic Design",
+        "modelNumber": "Teranex Mini SDI to Audio 12G",
+        "referenceUrl": "https://www.blackmagicdesign.com/products/teranexmini/techspecs/W-TERAMIN-05",
+        "category": "Audio I/O",
+        "powerDrawW": 16,
+        "searchTerms": [
+          "blackmagic",
+          "teranex",
+          "de-embedder",
+          "deembed",
+          "audio extract"
+        ],
+        "heightMm": 45,
+        "widthMm": 140,
+        "depthMm": 170,
+        "weightKg": 0.6,
+        "hiddenPorts": [
+          "device-21-7"
+        ],
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-19",
+      "type": "device",
+      "position": {
+        "x": 0,
+        "y": 960
+      },
+      "measured": {
+        "width": 176,
+        "height": 128
+      },
+      "data": {
+        "label": "Company Switch 400A 3-Phase",
+        "ports": [
+          {
+            "id": "cs-l1",
+            "label": "Feed L1",
+            "signalType": "power-l1",
+            "direction": "output",
+            "connectorType": "cam-lok"
+          },
+          {
+            "id": "cs-l2",
+            "label": "Feed L2",
+            "signalType": "power-l2",
+            "direction": "output",
+            "connectorType": "cam-lok"
+          },
+          {
+            "id": "cs-l3",
+            "label": "Feed L3",
+            "signalType": "power-l3",
+            "direction": "output",
+            "connectorType": "cam-lok"
+          },
+          {
+            "id": "cs-n",
+            "label": "Feed N",
+            "signalType": "power-neutral",
+            "direction": "output",
+            "connectorType": "cam-lok"
+          },
+          {
+            "id": "cs-g",
+            "label": "Feed G",
+            "signalType": "power-ground",
+            "direction": "output",
+            "connectorType": "cam-lok"
+          }
+        ],
+        "deviceType": "company-switch",
+        "model": "Company Switch 400A 3-Phase",
+        "manufacturer": "TestCo",
+        "modelNumber": "CS-400",
+        "powerCapacityW": 144000,
+        "voltage": "208V 3-Phase",
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device-20",
+      "type": "device",
+      "position": {
+        "x": 496,
+        "y": 960
+      },
+      "measured": {
+        "width": 176,
+        "height": 80
+      },
+      "data": {
+        "label": "Roomless Wall Plate",
+        "ports": [
+          {
+            "id": "probe-lan",
+            "label": "LAN",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45",
+            "networkConfig": {
+              "ip": "10.20.0.50",
+              "subnetMask": "255.255.255.0",
+              "gateway": "10.20.0.1"
+            }
+          },
+          {
+            "id": "probe-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "edison"
+          }
+        ],
+        "deviceType": "wall-plate",
+        "model": "Roomless Wall Plate",
+        "manufacturer": "TestCo",
+        "modelNumber": "RP-1",
+        "powerDrawW": 12,
+        "auxiliaryData": [
+          {
+            "text": "{{deviceType}}",
+            "position": "header"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "source": "device-1",
+      "sourceHandle": "lc-out-1",
+      "target": "device-3",
+      "targetHandle": "sc-in-1",
+      "data": {
+        "signalType": "fiber",
+        "cableLength": "150 ft"
+      },
+      "style": {
+        "stroke": "var(--color-fiber)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-2",
+      "source": "device-3",
+      "sourceHandle": "sc-out-1",
+      "target": "device-1",
+      "targetHandle": "lc-in-1",
+      "data": {
+        "signalType": "fiber",
+        "cableLength": "150 ft"
+      },
+      "style": {
+        "stroke": "var(--color-fiber)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-3",
+      "source": "device-2",
+      "sourceHandle": "st-out-1",
+      "target": "device-4",
+      "targetHandle": "optical-in-1",
+      "data": {
+        "signalType": "fiber"
+      },
+      "style": {
+        "stroke": "var(--color-fiber)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-4",
+      "source": "device-9",
+      "sourceHandle": "sw-port-1-out",
+      "target": "device-20",
+      "targetHandle": "probe-lan-in",
+      "data": {
+        "signalType": "ethernet",
+        "cableId": "N001",
+        "cableLength": "75 ft",
+        "gaugeAwg": "23",
+        "tested": true
+      },
+      "style": {
+        "stroke": "var(--color-ethernet)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-5",
+      "source": "device-9",
+      "sourceHandle": "sw-port-2-out",
+      "target": "device-8",
+      "targetHandle": "pp-1-rear",
+      "data": {
+        "signalType": "ethernet"
+      },
+      "style": {
+        "stroke": "var(--color-ethernet)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-6",
+      "source": "device-8",
+      "sourceHandle": "pp-1-front",
+      "target": "device-18",
+      "targetHandle": "laptop-lan-in",
+      "data": {
+        "signalType": "ethernet"
+      },
+      "style": {
+        "stroke": "var(--color-ethernet)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-7",
+      "source": "device-15",
+      "sourceHandle": "foh-xlr-out-l",
+      "target": "device-6",
+      "targetHandle": "amp-xlr-in-1",
+      "data": {
+        "signalType": "analog-audio",
+        "multicableLabel": "FOH Snake"
+      },
+      "style": {
+        "stroke": "var(--color-analog-audio)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-8",
+      "source": "device-15",
+      "sourceHandle": "foh-xlr-out-r",
+      "target": "device-16",
+      "targetHandle": "combo-in-1",
+      "data": {
+        "signalType": "analog-audio",
+        "multicableLabel": "FOH Snake"
+      },
+      "style": {
+        "stroke": "var(--color-analog-audio)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-9",
+      "source": "device-17",
+      "sourceHandle": "deck-trs-out-l",
+      "target": "device-8",
+      "targetHandle": "pp-6-rear",
+      "data": {
+        "signalType": "analog-audio"
+      },
+      "style": {
+        "stroke": "var(--color-analog-audio)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-10",
+      "source": "device-8",
+      "sourceHandle": "pp-6-front",
+      "target": "device-15",
+      "targetHandle": "foh-trs-in-1",
+      "data": {
+        "signalType": "analog-audio"
+      },
+      "style": {
+        "stroke": "var(--color-analog-audio)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-11",
+      "source": "device-11",
+      "sourceHandle": "ups-edison-out-1",
+      "target": "device-7",
+      "targetHandle": "mon-power",
+      "data": {
+        "signalType": "power"
+      },
+      "style": {
+        "stroke": "var(--color-power)",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-12",
+      "source": "device-11",
+      "sourceHandle": "ups-edison-out-2",
+      "target": "device-5",
+      "targetHandle": "proj-power",
+      "data": {
+        "signalType": "power"
+      },
+      "style": {
+        "stroke": "var(--color-power)",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "ownedGear": [
+    {
+      "quantity": 4,
+      "template": {
+        "deviceType": "converter",
+        "label": "Fiber RX — SC",
+        "manufacturer": "Fibrelink",
+        "modelNumber": "FX-SC4",
+        "unitCost": 450,
+        "ports": [
+          {
+            "id": "sc-in-1",
+            "label": "SC In 1",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "sc"
+          },
+          {
+            "id": "sc-in-2",
+            "label": "SC In 2",
+            "signalType": "fiber",
+            "direction": "input",
+            "connectorType": "sc"
+          },
+          {
+            "id": "sc-out-1",
+            "label": "SC Out 1",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "sc"
+          },
+          {
+            "id": "sc-out-2",
+            "label": "SC Out 2",
+            "signalType": "fiber",
+            "direction": "output",
+            "connectorType": "sc"
+          }
+        ]
+      }
+    },
+    {
+      "quantity": 1,
+      "template": {
+        "deviceType": "network-switch",
+        "label": "Core Switch 48-Port",
+        "manufacturer": "TestCo",
+        "modelNumber": "SW-48P",
+        "unitCost": 2400,
+        "ports": [
+          {
+            "id": "sw-port-1",
+            "label": "Port 1",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45",
+            "networkConfig": {
+              "ip": "10.20.0.1",
+              "subnetMask": "255.255.255.0",
+              "gateway": "10.20.0.1",
+              "vlan": 20
+            }
+          },
+          {
+            "id": "sw-port-2",
+            "label": "Port 2",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45"
+          },
+          {
+            "id": "sw-port-3",
+            "label": "Port 3",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45"
+          },
+          {
+            "id": "sw-port-4",
+            "label": "Port 4",
+            "signalType": "ethernet",
+            "direction": "bidirectional",
+            "connectorType": "rj45"
+          },
+          {
+            "id": "sw-uplink",
+            "label": "Uplink (SFP)",
+            "signalType": "fiber",
+            "direction": "bidirectional",
+            "connectorType": "lc"
+          },
+          {
+            "id": "sw-power",
+            "label": "AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          }
+        ]
+      }
+    },
+    {
+      "quantity": 1,
+      "template": {
+        "deviceType": "speaker",
+        "label": "Powered Speaker (IEC)",
+        "manufacturer": "TestCo",
+        "modelNumber": "PS-12",
+        "unitCost": 1100,
+        "ports": [
+          {
+            "id": "spk-iec-in",
+            "label": "IEC AC In",
+            "signalType": "power",
+            "direction": "input",
+            "connectorType": "iec"
+          },
+          {
+            "id": "spk-xlr-in",
+            "label": "XLR In",
+            "signalType": "analog-audio",
+            "direction": "input",
+            "connectorType": "xlr-3"
+          }
+        ]
+      }
+    }
+  ],
+  "titleBlock": {
+    "showName": "EasySchematic Test Fixture",
+    "venue": "main Hall",
+    "designer": "Test Pass",
+    "engineer": "",
+    "date": "",
+    "drawingTitle": "Seeded Test Schematic",
+    "company": "EasySchematic",
+    "revision": "A",
+    "logo": "",
+    "customFields": []
+  }
+}

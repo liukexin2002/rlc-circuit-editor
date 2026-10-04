@@ -1,0 +1,346 @@
+/**
+ * Shared wire protocol for the EasySchematic MCP bridge (Beta).
+ *
+ * This is the single source of truth for the messages exchanged between:
+ *   - the standalone MCP server (`mcp-server/`, a Node process Claude attaches to), and
+ *   - the in-app bridge (`src/mcpBridge.ts`, a WebSocket client inside the running editor).
+ *
+ * It MUST stay dependency-free (no imports from the rest of `src/`) so the server's
+ * own TypeScript build can include this exact file without pulling in the app. Keep it
+ * to plain types + constants.
+ */
+
+/** Default localhost port the MCP server listens on and the app dials. Both sides
+ *  share this constant; either may override it (server via env, app via the setting). */
+export const DEFAULT_BRIDGE_PORT = 8765;
+
+/** Bumped when the message shapes change incompatibly, so a mismatched server/app pair
+ *  refuses to pair instead of misbehaving. */
+export const PROTOCOL_VERSION = 1;
+
+/** The bridge tools: the eight Ship-1 "working core" tools, the two Ship-2
+ *  "editing & layout" tools (move_device, delete_connection), the two Ship-3
+ *  "batch" tools (add_devices, connect_devices_batch), the two Ship-4
+ *  "rooms" tools (create_room, place_device_in_room), the Ship-5
+ *  "annotations" tool (add_note), the three Ship-6 "slots / modular chassis"
+ *  tools (list_slot_cards, install_card, remove_card), and the four Ship-7
+ *  "racks / rack elevation" tools (list_racks, create_rack, place_device_in_rack,
+ *  remove_device_from_rack), the two Ship-8 "notes" tools (update_note,
+ *  delete_note — get_schematic also now reports rooms + notes), and the two Ship-9
+ *  "batch structural" tools (install_card_batch, place_device_in_rack_batch). */
+export type CommandType =
+  | "get_schematic"
+  | "list_devices"
+  | "get_device"
+  | "search_templates"
+  | "add_device"
+  | "set_device_property"
+  | "connect_devices"
+  | "delete_device"
+  | "move_device"
+  | "delete_connection"
+  | "add_devices"
+  | "connect_devices_batch"
+  | "create_room"
+  | "place_device_in_room"
+  | "add_note"
+  | "list_slot_cards"
+  | "install_card"
+  | "remove_card"
+  | "list_racks"
+  | "create_rack"
+  | "place_device_in_rack"
+  | "remove_device_from_rack"
+  | "update_note"
+  | "delete_note"
+  | "install_card_batch"
+  | "place_device_in_rack_batch";
+
+/** Max items accepted by a single batch tool call (input arrives over the bridge,
+ *  so it is capped). The mcp-server tool schemas mirror this as `maxItems`. */
+export const MAX_BATCH_ITEMS = 100;
+
+/** Which two-sided face of a port to wire. Required only for bidirectional ports
+ *  (`in`/`out`) and passthrough ports (`rear`/`front`); ignored for plain ports. */
+export type PortFace = "in" | "out" | "rear" | "front";
+
+/** The rack enclosure types, mirroring `RackType` in `src/types.ts`. Kept here as the
+ *  single source the bridge validates against (create_rack); the server tool schema
+ *  mirrors the same five values. */
+export const RACK_TYPES = ["floor-19", "wall-mount", "desktop", "open-2post", "open-4post"] as const;
+
+// ---------------------------------------------------------------------------
+// App -> server: handshake. The app proves it is the real editor (token) and the
+// server validates token + Origin before accepting any commands.
+// ---------------------------------------------------------------------------
+export interface HelloMessage {
+  type: "hello";
+  /** Pairing token the user copied from the server into the app's Preferences. */
+  token: string;
+  protocolVersion: number;
+  /** Stable id for this browser tab, so the server can report which tab is bound. */
+  clientId: string;
+  /** Human-friendly name of the open schematic, surfaced to Claude. */
+  schematicName?: string;
+}
+
+/** Server -> app: result of the handshake. */
+export interface HelloAck {
+  type: "hello_ack";
+  ok: boolean;
+  /** When ok=false, why pairing was refused (bad token, version mismatch, etc.). */
+  reason?: string;
+}
+
+/** Server -> app: a tool invocation to run against the store. */
+export interface CommandMessage {
+  type: "command";
+  requestId: string;
+  command: CommandType;
+  params: Record<string, unknown>;
+}
+
+/** App -> server: the correlated result of a CommandMessage. */
+export interface ResponseMessage {
+  type: "response";
+  requestId: string;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+}
+
+/** Server -> app: sent when this tab is being unbound because another tab claimed
+ *  the connection, so the app can show an honest "disconnected" status. */
+export interface SupersededMessage {
+  type: "superseded";
+  reason: string;
+}
+
+/** Messages the app may send to the server. */
+export type BridgeClientMessage = HelloMessage | ResponseMessage;
+/** Messages the server may send to the app. */
+export type BridgeServerMessage = HelloAck | CommandMessage | SupersededMessage;
+
+// ---------------------------------------------------------------------------
+// Tool parameter shapes (documented contract; validated on both ends).
+// ---------------------------------------------------------------------------
+export interface AddDeviceParams {
+  /** Template identity to instantiate — get one from `search_templates`. */
+  templateId: string;
+  /** Optional custom label; defaults to the template's name. */
+  label?: string;
+  /** Canvas position; defaults to a free spot near origin when omitted. */
+  x?: number;
+  y?: number;
+}
+
+export interface SetDevicePropertyParams {
+  nodeId: string;
+  /** Only keys in SAFE_DEVICE_FIELDS are applied; anything else is rejected. */
+  properties: Record<string, string | number | boolean>;
+}
+
+export interface ConnectDevicesParams {
+  sourceNodeId: string;
+  sourcePortId: string;
+  sourceFace?: PortFace;
+  targetNodeId: string;
+  targetPortId: string;
+  targetFace?: PortFace;
+}
+
+export interface GetDeviceParams {
+  nodeId: string;
+}
+
+export interface SearchTemplatesParams {
+  query: string;
+  limit?: number;
+}
+
+export interface DeleteDeviceParams {
+  nodeId: string;
+}
+
+export interface MoveDeviceParams {
+  nodeId: string;
+  /** New position in the SAME coordinate space get_device/get_schematic report for
+   *  this device: canvas coordinates for a top-level device, or coordinates relative
+   *  to its room/rack when the device has a parentId. Does not change containment. */
+  x: number;
+  y: number;
+}
+
+export interface DeleteConnectionParams {
+  /** The connection (edge) id from get_schematic / connect_devices. */
+  connectionId: string;
+}
+
+export interface AddDevicesParams {
+  /** Devices to add in one call; each is added independently (best-effort). */
+  devices: AddDeviceParams[];
+}
+
+export interface ConnectDevicesBatchParams {
+  /** Connections to make in one call; each is attempted independently in array
+   *  order (best-effort), so an earlier connection can affect a later one. */
+  connections: ConnectDevicesParams[];
+}
+
+export interface CreateRoomParams {
+  /** The room's name, shown on the canvas. */
+  label: string;
+  /** Room top-left position in canvas coordinates. */
+  x: number;
+  y: number;
+  /** Optional room size; both are required together when given. Defaults to
+   *  400x300. Minimums mirror the editor: width >= 200, height >= 150. */
+  width?: number;
+  height?: number;
+}
+
+export interface PlaceDeviceInRoomParams {
+  /** The device to place inside the room. */
+  deviceId: string;
+  /** The target room (container) id from get_schematic / create_room. */
+  roomId: string;
+  /** Position relative to the room's top-left corner; defaults to (16,16). The
+   *  device's center must land inside the room or the call fails (nothing changes). */
+  x?: number;
+  y?: number;
+}
+
+export interface AddNoteParams {
+  /** Plain text for the note card. It is HTML-escaped on the way in (the note
+   *  renders as HTML), so it always shows literally; newlines become line breaks. */
+  text: string;
+  /** Note top-left position in canvas coordinates. */
+  x: number;
+  y: number;
+}
+
+export interface ListSlotCardsParams {
+  /** The modular device (chassis) whose slot you want cards for. */
+  deviceId: string;
+  /** A slot id from get_device's `slots`. */
+  slotId: string;
+}
+
+export interface InstallCardParams {
+  /** The modular device (chassis) to install the card into. */
+  deviceId: string;
+  /** The (empty) slot's id, from get_device's `slots`. */
+  slotId: string;
+  /** A card templateId from list_slot_cards. Its slot family must match the slot's. */
+  cardTemplateId: string;
+}
+
+export interface RemoveCardParams {
+  /** The modular device (chassis) to remove a card from. */
+  deviceId: string;
+  /** The (filled) slot's id, from get_device's `slots`. */
+  slotId: string;
+}
+
+export interface CreateRackParams {
+  /** Display name for the rack. Defaults to "Rack". */
+  label?: string;
+  /** Rack height in rack units. Clamped to the editor's range [2, 60]. Default 42. */
+  heightU?: number;
+  /** One of RACK_TYPES. Default "floor-19". */
+  rackType?: string;
+  /** Rack depth in mm. Clamped to the editor's range [100, 2000]. Default 600. */
+  depthMm?: number;
+  /** Target rack-elevation page id (from list_racks). When omitted, a new rack page
+   *  is created and the rack is added to it. */
+  pageId?: string;
+  /** Name for the new rack page, used only when `pageId` is omitted. Default
+   *  "Rack Elevation". */
+  pageLabel?: string;
+}
+
+export interface PlaceDeviceInRackParams {
+  /** The device (from get_schematic) to mount in the rack. */
+  deviceId: string;
+  /** The target rack's id, from list_racks. Its page is derived from this id. */
+  rackId: string;
+  /** Bottom U position (1-based, counted from the bottom). The device's height in U
+   *  is inferred from its dimensions; the call fails if the span is occupied or out of
+   *  the rack's bounds. */
+  uPosition: number;
+  /** Which face to mount on; defaults to "front". "rear" is rejected on 2-post racks. */
+  face?: "front" | "rear";
+}
+
+export interface RemoveDeviceFromRackParams {
+  /** The placement id to remove, from list_racks. The device itself stays on the
+   *  schematic — only its rack placement is removed. */
+  placementId: string;
+}
+
+export interface UpdateNoteParams {
+  /** The note id, from get_schematic's `notes`. */
+  noteId: string;
+  /** New plain text for the note. HTML-escaped on the way in (the note renders as
+   *  HTML), so it always shows literally; newlines become line breaks. Replaces the
+   *  note's content (a note with rich editor formatting becomes plain text). */
+  text: string;
+}
+
+export interface DeleteNoteParams {
+  /** The note id to delete, from get_schematic's `notes`. */
+  noteId: string;
+}
+
+export interface InstallCardBatchParams {
+  /** Cards to install in one call; each is attempted independently in array order
+   *  (best-effort). Order matters: installing a card that itself adds sub-slots can make
+   *  a later install into one of those sub-slots valid, and two installs targeting the
+   *  same slot leave only the first applied (the second fails — the slot is now filled). */
+  installs: InstallCardParams[];
+}
+
+export interface PlaceDeviceInRackBatchParams {
+  /** Placements to make in one call; each is attempted independently in array order
+   *  (best-effort), so an earlier placement can affect a later one (it consumes the U
+   *  span / half-rack side, and a device already placed by an earlier item is rejected
+   *  by a later one). */
+  placements: PlaceDeviceInRackParams[];
+}
+
+// ---------------------------------------------------------------------------
+// Device-property whitelist. Each safe field maps to the store action that
+// applies it correctly. Fields with port/edge/structural invariants are
+// deliberately ABSENT and rejected (deferred to Ship 2), so the bridge can
+// never corrupt a drawing through a blind merge.
+// ---------------------------------------------------------------------------
+export type SafeFieldKind = "label" | "shortName" | "patch";
+
+export const SAFE_DEVICE_FIELDS: Record<string, SafeFieldKind> = {
+  label: "label",
+  shortName: "shortName",
+  hostname: "patch",
+  color: "patch",
+  headerColor: "patch",
+  manufacturer: "patch",
+  modelNumber: "patch",
+  referenceUrl: "patch",
+  category: "patch",
+  note: "patch",
+  serialNumber: "patch",
+  voltage: "patch",
+  powerDrawW: "patch",
+  powerCapacityW: "patch",
+  thermalBtuh: "patch",
+  poeBudgetW: "patch",
+  poeDrawW: "patch",
+  unitCost: "patch",
+  heightMm: "patch",
+  widthMm: "patch",
+  depthMm: "patch",
+  weightKg: "patch",
+  isSpare: "patch",
+  isVenueProvided: "patch",
+  useShortName: "patch",
+  wrapLabel: "patch",
+};

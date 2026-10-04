@@ -1,0 +1,7 @@
+Cable ID,Source,Src Port,Src Conn,Target,Tgt Port,Tgt Conn,Cable Type,Signal,Length,Est. Length,Gauge (AWG),Alias,Tested,Use,Src Room,Tgt Room,Snake,Bundle
+C001,FOH Console,XLR Out L,XLR-3,Amp Rack,XLR In 1,XLR-3,Analog Snake,Audio,15 ft,,22,,Yes,Send,Sanctuary > FOH,Sanctuary > FOH,FOH Snake,
+C002,FOH Console,XLR Out R,XLR-3,Amp Rack,XLR In 2,XLR-3,Analog Snake,Audio,15 ft,,22,,Yes,Send,Sanctuary > FOH,Sanctuary > FOH,FOH Snake,
+C003,Network Switch,Port 5,RJ45,Wireless AP,LAN,RJ45,Cat6,Ethernet,60 ft,,23,,Yes,,Rack Room,Sanctuary > FOH,,
+C004,Network Switch,Port 6,RJ45,Lobby Display,LAN,RJ45,Cat6,Ethernet,120 ft,,23,,Yes,,Rack Room,Lobby,,
+C005,Video Switcher,HDMI Out 1,HDMI,Lobby Display,HDMI In,HDMI,HDMI,HDMI,100 ft,,,,No,,Rack Room,Lobby,,
+C006,Stage Camera,SDI Out,BNC,Video Switcher,SDI In 3,BNC,RG6,SDI,200 ft,,20,,Yes,,Sanctuary > Stage,Rack Room,,

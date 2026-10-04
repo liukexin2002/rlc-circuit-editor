@@ -1,0 +1,123 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env*
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# Dropbox sync exclusions — local workflow, not part of the project
+.dropboxignore
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Build artifacts
+*.tsbuildinfo
+
+# Debug artifacts
+canvas-screenshot*.png
+debug-capture.mjs
+screenshot.mjs
+debug/
+edge-debug.log
+*.tmp.*
+
+# Routing harness — generated reports (baselines/ are committed golden snapshots)
+src/__tests__/fixtures/routing/reports/
+
+# Real user/client schematic exports are local-only (contain client names, IPs,
+# device labels, topology) — EasySchematic is a public repo. Synthetic fixtures live
+# in code; the default schematic ships with the app. Whitelist only public baselines.
+src/__tests__/fixtures/routing/*.json
+src/__tests__/fixtures/routing/baselines/*
+!src/__tests__/fixtures/routing/baselines/fan-out-dense.json
+!src/__tests__/fixtures/routing/baselines/backward-edges.json
+!src/__tests__/fixtures/routing/baselines/nested-rooms.json
+!src/__tests__/fixtures/routing/baselines/stubs-spread.json
+!src/__tests__/fixtures/routing/baselines/mixed-signal-corridor.json
+!src/__tests__/fixtures/routing/baselines/crossing-grid.json
+!src/__tests__/fixtures/routing/baselines/multi-source-stack.json
+!src/__tests__/fixtures/routing/baselines/fan-through-gap.json
+!src/__tests__/fixtures/routing/baselines/defaultSchematic.json
+!src/__tests__/fixtures/routing/baselines/bundle-6-same-pair.json
+!src/__tests__/fixtures/routing/baselines/bundle-fan-in.json
+!src/__tests__/fixtures/routing/baselines/bundle-mixed-signal.json
+!src/__tests__/fixtures/routing/baselines/bundle-with-traffic.json
+
+# Reports harness — generated snapshots (baselines/ are committed golden snapshots);
+# same public-repo rule as routing: dropped-in client exports and their goldens stay local.
+src/__tests__/fixtures/reports/snapshots/
+src/__tests__/fixtures/reports/*.json
+src/__tests__/fixtures/reports/baselines/*
+!src/__tests__/fixtures/reports/baselines/kitchen-sink.json
+!src/__tests__/fixtures/reports/baselines/defaultSchematic.json
+
+# Playwright
+e2e/test-results/
+e2e/screenshots/
+e2e-rlc/test-results/
+playwright-report/
+.playwright/
+
+# Standalone RLC editor build output
+/dist-rlc/
+
+# Generated seed data
+api/seed/seed-data.sql
+api/seed/import-*.sql
+api/seed/prod-templates.sql
+src/deviceLibrary.fallback.json
+docs/src/searchIndex.json
+
+# Generated developer API reference (TypeDoc → /dev/ on the docs site)
+docs/public/dev/
+
+# DB backups
+api/backup-*.sql
+backups/
+
+# Wrangler local state
+.wrangler/
+.dev.vars
+
+# Vite cache
+.vite/
+
+# Internal notes
+internal/
+
+# Shadow .js emissions next to TypeScript sources — Vite resolves .js before .ts,
+# so any stray compiled .js will silently override the real source.
+docs/src/**/*.js
+src/**/*.js
+devices/src/**/*.js
+
+# One-off scripts at repo root (anchor so nested scripts/ dirs aren't swept up)
+/scripts/
+
+# Local dev
+start-dev.sh
+email-signature.html
+
+# Local QA test-report artifacts (test-report skill)
+test-reports/

@@ -1,0 +1,941 @@
+import type {
+  SchematicNode,
+  ConnectionEdge,
+  DeviceData,
+  RoomData,
+  SignalType,
+  SchematicPage,
+} from "./types";
+import { SIGNAL_LABELS, RACK_TYPE_LABELS } from "./types";
+import { getCableType } from "./cableTypes";
+import { transformLabelNow, labelsAreRaw } from "./labelCaseUtils";
+import { findPortByHandle } from "./portHandles";
+import type { ReportLayout } from "./reportLayout";
+import type { ReportTableData } from "./reportPdf";
+
+export type CableCategory = "Video" | "Audio" | "Control" | "Data" | "Power" | "Custom";
+
+const SIGNAL_CATEGORY: Record<string, CableCategory> = {
+  SDI: "Video",
+  HDMI: "Video",
+  NDI: "Video",
+  DisplayPort: "Video",
+  HDBaseT: "Video",
+  SRT: "Video",
+  Composite: "Video",
+  VGA: "Video",
+  Analog: "Audio",
+  Speaker: "Audio",
+  Bluetooth: "Audio",
+  AES: "Audio",
+  Dante: "Audio",
+  AVB: "Audio",
+  MADI: "Audio",
+  MIDI: "Audio",
+  "S/PDIF": "Audio",
+  ADAT: "Audio",
+  Ultranet: "Audio",
+  AES50: "Audio",
+  StageConnect: "Audio",
+  DMX: "Control",
+  Genlock: "Control",
+  GPIO: "Control",
+  "RS-422": "Control",
+  Serial: "Control",
+  Tally: "Control",
+  USB: "Data",
+  Fiber: "Data",
+  Thunderbolt: "Data",
+  Ethernet: "Data",
+  Power: "Power",
+  "L1 (Phase A)": "Power",
+  "L2 (Phase B)": "Power",
+  "L3 (Phase C)": "Power",
+  Neutral: "Power",
+  Ground: "Power",
+  Custom: "Custom",
+};
+
+const CATEGORY_ORDER: CableCategory[] = ["Video", "Audio", "Control", "Data", "Power", "Custom"];
+
+export function getCableCategory(signalLabel: string): CableCategory {
+  return SIGNAL_CATEGORY[signalLabel] ?? "Custom";
+}
+
+export function groupCablesByCategory(rows: PackListSummaryRow[]): { category: CableCategory; rows: PackListSummaryRow[]; total: number }[] {
+  const groups = new Map<CableCategory, PackListSummaryRow[]>();
+  for (const row of rows) {
+    const cat = getCableCategory(row.signalType);
+    const arr = groups.get(cat);
+    if (arr) arr.push(row);
+    else groups.set(cat, [row]);
+  }
+  return CATEGORY_ORDER
+    .filter((cat) => groups.has(cat))
+    .map((cat) => {
+      const catRows = groups.get(cat)!;
+      return { category: cat, rows: catRows, total: catRows.reduce((sum, r) => sum + r.count, 0) };
+    });
+}
+
+export interface PackListDeviceCard {
+  cardLabel: string;
+  manufacturer: string;
+  modelNumber: string;
+  count: number;
+  cardUnitCost: number;
+}
+
+export interface PackListDevice {
+  model: string;
+  deviceType: string;
+  room: string;
+  count: number;
+  manufacturer: string;
+  modelNumber: string;
+  cards: PackListDeviceCard[];
+  powerDrawW: number;
+  unitCost: number;
+  /** Per-instance serial numbers collected across the grouped devices (#P2-025). */
+  serialNumbers: string[];
+  /** Distinct device-level notes across the grouped devices (#P2-032). */
+  notes: string[];
+  /** How many of the grouped devices are flagged as (cold) spares (#P2-014). */
+  spareCount: number;
+}
+
+export interface PackListCable {
+  cableType: string;
+  signalType: string;
+  cableLength: string;
+  sourceDevice: string;
+  sourcePort: string;
+  sourceRoom: string;
+  targetDevice: string;
+  targetPort: string;
+  targetRoom: string;
+}
+
+export interface PackListSummaryRow {
+  cableType: string;
+  signalType: string;
+  cableLength: string;
+  route: string;
+  count: number;
+}
+
+export interface PackListAccessory {
+  model: string;
+  accessoryType: string;
+  room: string;
+  count: number;
+  integratedWithCable: boolean;
+}
+
+export interface PackListAdapter {
+  model: string;
+  room: string;
+  count: number;
+  manufacturer: string;
+  modelNumber: string;
+}
+
+/** A rack enclosure as a purchasable BOQ line item (#P2-024). */
+export interface PackListRack {
+  label: string;
+  rackType: string;
+  heightU: number;
+  room: string;
+  count: number;
+  unitCost: number;
+}
+
+export interface PackListData {
+  devices: PackListDevice[];
+  cables: PackListCable[];
+  summary: PackListSummaryRow[];
+  accessories: PackListAccessory[];
+  adapters: PackListAdapter[];
+  racks: PackListRack[];
+}
+
+/** Merge summary rows by (cableType, signalType, cableLength), dropping route (for non-room-grouped views) */
+export function mergeCablesByType(summary: PackListSummaryRow[]): PackListSummaryRow[] {
+  const map = new Map<string, PackListSummaryRow>();
+  for (const s of summary) {
+    const key = `${s.cableType}|${s.signalType}|${s.cableLength}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.count += s.count;
+    } else {
+      map.set(key, { ...s, route: "" });
+    }
+  }
+  return [...map.values()].sort(
+    (a, b) => b.count - a.count || a.cableType.localeCompare(b.cableType),
+  );
+}
+
+/** Merge per-room device rows into global totals (for non-room-grouped views) */
+export function mergeDevicesByModel(devices: PackListDevice[]): PackListDevice[] {
+  const map = new Map<string, PackListDevice>();
+  for (const d of devices) {
+    const key = `${d.manufacturer}|${d.modelNumber}|${d.model}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.count += d.count;
+      existing.serialNumbers.push(...d.serialNumbers);
+      for (const note of d.notes) if (!existing.notes.includes(note)) existing.notes.push(note);
+      existing.spareCount += d.spareCount;
+      // Merge cards
+      for (const card of d.cards) {
+        const ec = existing.cards.find(
+          (c) => c.cardLabel === card.cardLabel && c.manufacturer === card.manufacturer && c.modelNumber === card.modelNumber,
+        );
+        if (ec) ec.count += card.count;
+        else existing.cards.push({ ...card });
+      }
+    } else {
+      map.set(key, {
+        ...d,
+        room: "",
+        cards: d.cards.map((c) => ({ ...c })),
+        powerDrawW: d.powerDrawW,
+        serialNumbers: [...d.serialNumbers],
+        notes: [...d.notes],
+      });
+    }
+  }
+  return [...map.values()].sort(
+    (a, b) => a.model.localeCompare(b.model),
+  );
+}
+
+export function getRoomLabel(
+  nodes: SchematicNode[],
+  parentId: string | undefined,
+): string {
+  // A device that sits in no room reports a blank room, not an "Unassigned" sentinel —
+  // the reports read as a form with an empty field rather than asserting a room name
+  // that doesn't exist. Every other site that has to name the no-room case blanks it
+  // too (the rack rollup below, the cables-by-path group key, the network report), so
+  // the value and the group heading it lands under never disagree.
+  if (!parentId) return "";
+  const parts: string[] = [];
+  let currentId: string | undefined = parentId;
+  while (currentId) {
+    const node = nodes.find((n) => n.id === currentId);
+    if (!node || node.type !== "room") break;
+    // Room names follow the display-case preference, same as device and port names (#294).
+    // Applied per path segment rather than to the joined string so the " - " separator is
+    // never in play. The "Unnamed" sentinel is deliberately NOT transformed: it isn't a
+    // user label, and transforming it would split a single report group into two.
+    const label = (node.data as RoomData).label;
+    parts.unshift(label ? transformLabelNow(label) : "Unnamed");
+    currentId = node.parentId as string | undefined;
+  }
+  // On screen the path joins with " - ". Under withRawLabels — the re-importable
+  // cable-schedule CSV (#309) — it joins with " > " instead, the room-path syntax
+  // csvImport parses back into nesting (#324), so subrooms survive a round trip.
+  // The separator is not escapable: a room literally named "A > B" re-imports as
+  // a subroom "B" inside "A".
+  return parts.join(labelsAreRaw() ? " > " : " - ");
+}
+
+export function resolvePortLabel(
+  node: SchematicNode,
+  handleId: string | null | undefined,
+): string {
+  if (!handleId || node.type !== "device") return "";
+  const data = node.data as DeviceData;
+  const port = findPortByHandle(data, handleId);
+  return transformLabelNow(port?.label ?? handleId);
+}
+
+export function resolvePort(
+  node: SchematicNode | undefined,
+  handleId: string | null | undefined,
+) {
+  if (!handleId || !node || node.type !== "device") return undefined;
+  const data = node.data as DeviceData;
+  return findPortByHandle(data, handleId);
+}
+
+export function computePackList(
+  nodes: SchematicNode[],
+  edges: ConnectionEdge[],
+  pages: SchematicPage[] = [],
+): PackListData {
+  // Devices — grouped by (model, room) with counts (excluding cable accessories and passive adapters)
+  const deviceMap = new Map<string, PackListDevice>();
+  const accessoryMap = new Map<string, PackListAccessory>();
+  const adapterMap = new Map<string, PackListAdapter>();
+  for (const n of nodes) {
+    if (n.type !== "device") continue;
+    const data = n.data as DeviceData;
+    if (data.isVenueProvided) continue;
+    const model = transformLabelNow(data.model ?? data.baseLabel ?? data.label);
+    const room = getRoomLabel(nodes, n.parentId);
+
+    if (data.isCableAccessory) {
+      const key = `${model}|${room}`;
+      const existing = accessoryMap.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        accessoryMap.set(key, {
+          model,
+          accessoryType: data.deviceType,
+          room,
+          count: 1,
+          integratedWithCable: data.integratedWithCable ?? false,
+        });
+      }
+      continue;
+    }
+
+    // Passive adapters go to their own section (shown in cables tab)
+    if (data.deviceType === "adapter") {
+      const key = `${model}|${room}`;
+      const existing = adapterMap.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        adapterMap.set(key, {
+          model,
+          room,
+          count: 1,
+          manufacturer: data.manufacturer ?? "",
+          modelNumber: data.modelNumber ?? "",
+        });
+      }
+      continue;
+    }
+
+    const serial = (data.serialNumber ?? "").trim();
+    const note = (data.note ?? "").trim();
+    const isSpare = data.isSpare === true;
+
+    const key = `${model}|${room}`;
+    const existing = deviceMap.get(key);
+    if (existing) {
+      existing.count++;
+      if (serial) existing.serialNumbers.push(serial);
+      if (note && !existing.notes.includes(note)) existing.notes.push(note);
+      if (isSpare) existing.spareCount++;
+    } else {
+      deviceMap.set(key, {
+        model,
+        deviceType: data.deviceType,
+        room,
+        count: 1,
+        manufacturer: data.manufacturer ?? "",
+        modelNumber: data.modelNumber ?? "",
+        cards: [],
+        powerDrawW: data.powerDrawW ?? 0,
+        unitCost: data.unitCost ?? 0,
+        serialNumbers: serial ? [serial] : [],
+        notes: note ? [note] : [],
+        spareCount: isSpare ? 1 : 0,
+      });
+    }
+
+    // Collect installed expansion cards as sub-items of their parent device
+    if (data.slots) {
+      const device = deviceMap.get(key)!;
+      for (const slot of data.slots) {
+        if (!slot.cardTemplateId || !slot.cardLabel) continue;
+        const cardDisplayLabel = transformLabelNow(slot.cardLabel);
+        const cardKey = `${cardDisplayLabel}|${slot.cardManufacturer ?? ""}|${slot.cardModelNumber ?? ""}`;
+        const existingCard = device.cards.find(
+          (c) => `${c.cardLabel}|${c.manufacturer}|${c.modelNumber}` === cardKey,
+        );
+        if (existingCard) {
+          existingCard.count++;
+        } else {
+          device.cards.push({
+            cardLabel: cardDisplayLabel,
+            manufacturer: slot.cardManufacturer ?? "",
+            modelNumber: slot.cardModelNumber ?? "",
+            count: 1,
+            cardUnitCost: slot.cardUnitCost ?? 0,
+          });
+        }
+      }
+    }
+  }
+  const devices = [...deviceMap.values()].sort(
+    (a, b) => a.room.localeCompare(b.room) || a.model.localeCompare(b.model),
+  );
+
+  // Accessories — only non-integrated ones (integrated are grouped with trunk cable)
+  const accessories = [...accessoryMap.values()]
+    .filter((a) => !a.integratedWithCable)
+    .sort((a, b) => a.room.localeCompare(b.room) || a.model.localeCompare(b.model));
+
+  // Adapters — passive adapters shown in cables section
+  const adapters = [...adapterMap.values()].sort(
+    (a, b) => a.room.localeCompare(b.room) || a.model.localeCompare(b.model),
+  );
+
+  // Stubbed connections are split into two legs sharing a linkedConnectionId, each
+  // joining a real device to a stub-label node. Emit ONE cable per logical connection:
+  // process only the source-side leg and follow its partner to the real target device.
+  // Without this, every stubbed connection is counted twice and each row shows an
+  // "Unknown" endpoint. (Mirrors computeCableSchedule.)
+  const linkedPartner = new Map<string, ConnectionEdge>();
+  for (const e of edges) {
+    const link = e.data?.linkedConnectionId;
+    if (!link) continue;
+    const partner = edges.find((p) => p.id !== e.id && p.data?.linkedConnectionId === link);
+    if (partner) linkedPartner.set(e.id, partner);
+  }
+  const isSourceLeg = (e: ConnectionEdge): boolean =>
+    nodes.find((n) => n.id === e.source)?.type !== "stub-label";
+
+  // Cables — exclude edges where one side is a direct-attach adapter port
+  const cables: PackListCable[] = edges
+    .filter((e) => {
+      if (!e.data?.signalType) return false;
+      // For a stub pair, only the source-side leg represents the logical cable.
+      if (e.data?.linkedConnectionId && !isSourceLeg(e)) return false;
+      const effectiveTargetEdge = linkedPartner.get(e.id) ?? e;
+      const srcNode = nodes.find((n) => n.id === e.source);
+      const tgtNode = nodes.find((n) => n.id === effectiveTargetEdge.target);
+      const srcPort = resolvePort(srcNode, e.sourceHandle);
+      const tgtPort = resolvePort(tgtNode, effectiveTargetEdge.targetHandle);
+      if (srcNode?.type === "device" && (srcNode.data as DeviceData).deviceType === "adapter" && srcPort?.directAttach) return false;
+      if (tgtNode?.type === "device" && (tgtNode.data as DeviceData).deviceType === "adapter" && tgtPort?.directAttach) return false;
+      if (srcPort?.connectorType === "wireless" || tgtPort?.connectorType === "wireless") return false;
+      return true;
+    })
+    .map((e) => {
+      const effectiveTargetEdge = linkedPartner.get(e.id) ?? e;
+      const srcNode = nodes.find((n) => n.id === e.source);
+      const tgtNode = nodes.find((n) => n.id === effectiveTargetEdge.target);
+      const signalType = e.data!.signalType as SignalType;
+      const srcPort = resolvePort(srcNode, e.sourceHandle);
+      const tgtPort = resolvePort(tgtNode, effectiveTargetEdge.targetHandle);
+      const srcRoom = srcNode
+        ? getRoomLabel(nodes, srcNode.parentId)
+        : "Unknown";
+      const tgtRoom = tgtNode
+        ? getRoomLabel(nodes, tgtNode.parentId)
+        : "Unknown";
+      return {
+        cableType: getCableType(srcPort, tgtPort, signalType),
+        signalType: SIGNAL_LABELS[signalType],
+        cableLength: (e.data?.cableLength as string) ?? "",
+        sourceDevice: srcNode?.type === "device"
+          ? (srcNode.data as DeviceData).label
+          : "Unknown",
+        sourcePort: srcNode ? resolvePortLabel(srcNode, e.sourceHandle) : "",
+        sourceRoom: srcRoom,
+        targetDevice: tgtNode?.type === "device"
+          ? (tgtNode.data as DeviceData).label
+          : "Unknown",
+        targetPort: tgtNode ? resolvePortLabel(tgtNode, effectiveTargetEdge.targetHandle) : "",
+        targetRoom: tgtRoom,
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.cableType.localeCompare(b.cableType) ||
+        a.signalType.localeCompare(b.signalType),
+    );
+
+  // Summary — group by (cableType, signalType, cableLength, route)
+  const summaryMap = new Map<string, PackListSummaryRow>();
+  for (const c of cables) {
+    // A run that stays inside one room reads "Within Booth"; with no room to name there
+    // is nothing to say, so the route is blank rather than a dangling "Within ".
+    // A run that CROSSES the boundary keeps both halves even when one is blank —
+    // " > Booth" still carries that the cable leaves an unassigned area for Booth.
+    const route =
+      c.sourceRoom === c.targetRoom
+        ? c.sourceRoom
+          ? `Within ${c.sourceRoom}`
+          : ""
+        : `${c.sourceRoom} > ${c.targetRoom}`;
+    const key = `${c.cableType}|${c.signalType}|${c.cableLength}|${route}`;
+    const existing = summaryMap.get(key);
+    if (existing) {
+      existing.count++;
+    } else {
+      summaryMap.set(key, {
+        cableType: c.cableType,
+        signalType: c.signalType,
+        cableLength: c.cableLength,
+        route,
+        count: 1,
+      });
+    }
+  }
+  const summary = [...summaryMap.values()].sort(
+    (a, b) =>
+      b.count - a.count ||
+      a.cableType.localeCompare(b.cableType),
+  );
+
+  // Racks — each rack enclosure is a purchasable line item (#P2-024). Group identical
+  // racks (same label, type, height, room) into a single counted row.
+  const rackMap = new Map<string, PackListRack>();
+  for (const page of pages) {
+    if (page.type !== "rack-elevation") continue;
+    for (const rack of page.racks ?? []) {
+      // Blank, matching getRoomLabel — this rollup emits the no-room value directly
+      // rather than going through it, so the two have to stay in step or one report
+      // group splits into two rows.
+      const room = rack.linkedRoomId ? getRoomLabel(nodes, rack.linkedRoomId) : "";
+      const label = transformLabelNow(rack.label || "Rack");
+      const rackType = RACK_TYPE_LABELS[rack.rackType] ?? rack.rackType;
+      const key = `${label}|${rack.rackType}|${rack.heightU}|${room}|${rack.unitCost ?? 0}`;
+      const existing = rackMap.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        rackMap.set(key, {
+          label,
+          rackType,
+          heightU: rack.heightU,
+          room,
+          count: 1,
+          unitCost: rack.unitCost ?? 0,
+        });
+      }
+    }
+  }
+  const racks = [...rackMap.values()].sort(
+    (a, b) => a.room.localeCompare(b.room) || a.label.localeCompare(b.label),
+  );
+
+  return { devices, cables, summary, accessories, adapters, racks };
+}
+
+/** Generate a lookup key for cable costs: "cableType|signalType|cableLength" */
+export function cableCostKey(cableType: string, signalType: string, cableLength: string): string {
+  return `${cableType}|${signalType}|${cableLength}`;
+}
+
+/** Auto-generated "this document contains…" summary line for report headers (#P3-019). */
+export function computeDocumentSummary(
+  nodes: SchematicNode[],
+  edges: ConnectionEdge[],
+  pages: SchematicPage[] = [],
+): string {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const devices = nodes.filter(
+    (n) => n.type === "device" && !(n.data as DeviceData).isCableAccessory,
+  ).length;
+  const rooms = nodes.filter((n) => n.type === "room").length;
+  // A stubbed connection is two legs sharing a linkedConnectionId; the target-side
+  // leg's source is a stub-label node. Skip it so each logical connection counts once.
+  const isStubTargetLeg = (e: ConnectionEdge) =>
+    !!e.data?.linkedConnectionId &&
+    nodes.find((n) => n.id === e.source)?.type === "stub-label";
+  const connections = edges.filter(
+    (e) => e.data?.signalType && !isStubTargetLeg(e),
+  ).length;
+  let patch = 0;
+  let field = 0;
+  for (const e of edges) {
+    if (isStubTargetLeg(e)) continue;
+    if (e.data?.cableUse === "patch") patch++;
+    else if (e.data?.cableUse === "field") field++;
+  }
+  let racks = 0;
+  for (const p of pages) {
+    if (p.type === "rack-elevation") racks += p.racks?.length ?? 0;
+  }
+
+  const parts: string[] = [plural(devices, "device")];
+  let conn = plural(connections, "connection");
+  if (patch || field) conn += ` (${patch} patch / ${field} field)`;
+  parts.push(conn);
+  parts.push(plural(rooms, "room"));
+  if (racks) parts.push(plural(racks, "rack"));
+
+  // Join with commas, "and" before the last part.
+  const text =
+    parts.length > 1
+      ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+      : parts[0];
+  return `This document contains ${text}.`;
+}
+
+// --------------- CSV Export ---------------
+
+export function escapeCsv(val: string): string {
+  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
+    return `"${val.replace(/"/g, '""')}"`;
+  }
+  return val;
+}
+
+export function csvRow(cells: string[]): string {
+  return cells.map(escapeCsv).join(",");
+}
+
+/** Build the pack-list CSV file contents (including the UTF-8 BOM). */
+export function buildPackListCsv(
+  data: PackListData,
+  schematicName: string,
+  cableCosts?: Record<string, number>,
+  summary?: string,
+  generatedDate: string = new Date().toLocaleDateString(),
+): string {
+  const lines: string[] = [];
+
+  lines.push(`Pack List — ${schematicName}`);
+  lines.push(`Generated ${generatedDate}`);
+  if (summary) lines.push(summary);
+  lines.push("");
+
+  // Device List
+  lines.push("DEVICE LIST");
+  lines.push(csvRow(["Qty", "Device", "Manufacturer", "Model #", "Type", "Room", "Unit Cost", "Extended Cost", "Serial #", "Spare", "Note"]));
+  let deviceTotal = 0;
+  for (const d of data.devices) {
+    const extCost = d.unitCost > 0 ? d.unitCost * d.count : 0;
+    deviceTotal += extCost;
+    lines.push(csvRow([
+      `${d.count}`, d.model, d.manufacturer, d.modelNumber, d.deviceType, d.room,
+      d.unitCost > 0 ? d.unitCost.toFixed(2) : "",
+      extCost > 0 ? extCost.toFixed(2) : "",
+      d.serialNumbers.join(", "),
+      d.spareCount > 0 ? `${d.spareCount}` : "",
+      d.notes.join(" | "),
+    ]));
+    for (const c of d.cards) {
+      const cardExt = c.cardUnitCost > 0 ? c.cardUnitCost * c.count : 0;
+      deviceTotal += cardExt;
+      lines.push(csvRow([
+        `  ${c.count}`, `  ${c.cardLabel}`, c.manufacturer, c.modelNumber, "", "",
+        c.cardUnitCost > 0 ? c.cardUnitCost.toFixed(2) : "",
+        cardExt > 0 ? cardExt.toFixed(2) : "",
+      ]));
+    }
+  }
+  if (deviceTotal > 0) {
+    lines.push(csvRow(["", "", "", "", "", "", "TOTAL", deviceTotal.toFixed(2)]));
+  }
+  lines.push("");
+
+  // Cable Accessories
+  if (data.accessories.length > 0) {
+    lines.push("CABLE ACCESSORIES");
+    lines.push(csvRow(["Qty", "Accessory", "Type", "Room"]));
+    for (const a of data.accessories) {
+      lines.push(csvRow([`${a.count}`, a.model, a.accessoryType, a.room]));
+    }
+    lines.push("");
+  }
+
+  // Adapters
+  if (data.adapters.length > 0) {
+    lines.push("ADAPTERS");
+    lines.push(csvRow(["Qty", "Adapter", "Manufacturer", "Model #", "Room"]));
+    for (const a of data.adapters) {
+      lines.push(csvRow([`${a.count}`, a.model, a.manufacturer, a.modelNumber, a.room]));
+    }
+    lines.push("");
+  }
+
+  // Racks (#P2-024)
+  if (data.racks.length > 0) {
+    lines.push("RACKS");
+    lines.push(csvRow(["Qty", "Rack", "Type", "Height (U)", "Room", "Unit Cost", "Extended Cost"]));
+    let rackTotal = 0;
+    for (const r of data.racks) {
+      const ext = r.unitCost > 0 ? r.unitCost * r.count : 0;
+      rackTotal += ext;
+      lines.push(csvRow([
+        `${r.count}`, r.label, r.rackType, `${r.heightU}`, r.room,
+        r.unitCost > 0 ? r.unitCost.toFixed(2) : "",
+        ext > 0 ? ext.toFixed(2) : "",
+      ]));
+    }
+    if (rackTotal > 0) {
+      lines.push(csvRow(["", "", "", "", "", "TOTAL", rackTotal.toFixed(2)]));
+    }
+    lines.push("");
+  }
+
+  // Cable List
+  lines.push("CABLE LIST");
+  lines.push(csvRow(["Qty", "Cable Type", "Signal", "Length", "Route", "Unit Cost", "Extended Cost"]));
+  let cableTotal = 0;
+  for (const s of data.summary) {
+    const key = cableCostKey(s.cableType, s.signalType, s.cableLength);
+    const uc = cableCosts?.[key] ?? 0;
+    const ext = uc > 0 ? uc * s.count : 0;
+    cableTotal += ext;
+    lines.push(csvRow([
+      `${s.count}`, s.cableType, s.signalType, s.cableLength, s.route,
+      uc > 0 ? uc.toFixed(2) : "",
+      ext > 0 ? ext.toFixed(2) : "",
+    ]));
+  }
+  if (cableTotal > 0) {
+    lines.push(csvRow(["", "", "", "", "", "TOTAL", cableTotal.toFixed(2)]));
+  }
+
+  return "\uFEFF" + lines.join("\n");
+}
+
+export function exportPackListCsv(
+  data: PackListData,
+  schematicName: string,
+  cableCosts?: Record<string, number>,
+  summary?: string,
+): void {
+  const blob = new Blob([buildPackListCsv(data, schematicName, cableCosts, summary)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${schematicName.replace(/[^a-zA-Z0-9-_ ]/g, "")} - Pack List.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// --------------- Report Table Data Transform ---------------
+
+export function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyFn(item);
+    const arr = map.get(key);
+    if (arr) arr.push(item);
+    else map.set(key, [item]);
+  }
+  return map;
+}
+
+/**
+ * Group key for the cables-by-path view: the originating room of a summary row's route
+ * ("Within Booth" and "Booth > Stage" both key on "Booth").
+ *
+ * Falls back to a blank key, not an "Unassigned" sentinel — a run out of a device that
+ * sits in no room has a route of "Within " or " > Stage", which no longer parses, and a
+ * bucket labelled "Unassigned" here would contradict the blank Room shown on the rows
+ * inside it.
+ */
+export function routeRoomKey(route: string): string {
+  const match = route.match(/^Within (.+)$|^(.+?) >/);
+  return match?.[1] ?? match?.[2] ?? "";
+}
+
+/** Transform PackListData into the generic ReportTableData[] format for ReportPreviewDialog */
+export function getPackListTableData(
+  data: PackListData,
+  layout: ReportLayout,
+  cableCosts?: Record<string, number>,
+): ReportTableData[] {
+  const devicesTableDef = layout.tables.find((t) => t.id === "devices");
+  const cablesTableDef = layout.tables.find((t) => t.id === "cables");
+
+  // Devices table: only merge when room column is hidden AND not grouping by room
+  const roomColVisible = devicesTableDef?.columns.find((c) => c.key === "room")?.visible ?? false;
+  const devGroupBy = devicesTableDef?.groupBy;
+  const useRawDevices = devGroupBy === "room" || devGroupBy === "deviceType" || roomColVisible;
+  const deviceSource = useRawDevices ? data.devices : mergeDevicesByModel(data.devices);
+  const deviceRows: Record<string, string>[] = [];
+  for (const d of deviceSource) {
+    deviceRows.push({
+      count: `${d.count}x`,
+      model: d.model,
+      manufacturer: d.manufacturer,
+      modelNumber: d.modelNumber,
+      deviceType: d.deviceType,
+      room: d.room,
+      powerDrawW: d.powerDrawW > 0 ? `${d.powerDrawW}` : "",
+      unitCost: d.unitCost > 0 ? `$${d.unitCost.toFixed(2)}` : "",
+      extCost: d.unitCost > 0 ? `$${(d.unitCost * d.count).toFixed(2)}` : "",
+      serialNumber: d.serialNumbers.join(", "),
+      note: d.notes.join(" | "),
+      spare: d.spareCount > 0 ? `${d.spareCount}` : "",
+    });
+    for (const c of d.cards) {
+      deviceRows.push({
+        count: `${c.count}x`,
+        model: c.cardLabel,
+        manufacturer: c.manufacturer,
+        modelNumber: c.modelNumber,
+        deviceType: "",
+        room: "",
+        _isSubItem: "true",
+        unitCost: c.cardUnitCost > 0 ? `$${c.cardUnitCost.toFixed(2)}` : "",
+        extCost: c.cardUnitCost > 0 ? `$${(c.cardUnitCost * c.count).toFixed(2)}` : "",
+      });
+    }
+  }
+
+  let deviceGroupedRows: Map<string, Record<string, string>[]> | undefined;
+  if (devGroupBy === "room") {
+    deviceGroupedRows = groupBy(deviceRows, (r) => r.room);
+  } else if (devGroupBy === "deviceType") {
+    deviceGroupedRows = groupBy(deviceRows, (r) => r.deviceType || "Other");
+  }
+
+  // Cables table: only merge when route column is hidden AND not grouping by path
+  const routeColVisible = cablesTableDef?.columns.find((c) => c.key === "route")?.visible ?? false;
+  const cabGroupBy = cablesTableDef?.groupBy;
+  const useRawCables = cabGroupBy === "path" || routeColVisible;
+  const summarySource = useRawCables ? data.summary : mergeCablesByType(data.summary);
+  const adapterCableRows = data.adapters.map((a) => ({
+    count: `${a.count}x`,
+    cableType: a.model,
+    signalType: "",
+    cableLength: "",
+    route: "",
+    unitCost: "",
+    extCost: "",
+  }));
+  const cableRows = [
+    ...summarySource.map((s) => {
+      const key = cableCostKey(s.cableType, s.signalType, s.cableLength);
+      const uc = cableCosts?.[key] ?? 0;
+      return {
+        count: `${s.count}x`,
+        cableType: s.cableType,
+        signalType: s.signalType,
+        cableLength: s.cableLength,
+        route: s.route,
+        unitCost: uc > 0 ? `$${uc.toFixed(2)}` : "",
+        extCost: uc > 0 ? `$${(uc * s.count).toFixed(2)}` : "",
+      };
+    }),
+    ...adapterCableRows,
+  ];
+
+  let cableGroupedRows: Map<string, Record<string, string>[]> | undefined;
+  if (cabGroupBy === "path") {
+    cableGroupedRows = groupBy(cableRows.filter((r) => r.signalType !== ""), (r) =>
+      routeRoomKey(r.route),
+    );
+    if (adapterCableRows.length > 0) cableGroupedRows.set("Adapters", adapterCableRows);
+  } else if (cabGroupBy === "category") {
+    // Group by cable category in the defined order (Video, Audio, Control, Data, Power, Custom)
+    const ordered = groupCablesByCategory(summarySource);
+    cableGroupedRows = new Map(
+      ordered.map((g): [string, Record<string, string>[]] => [
+        g.category,
+        g.rows.map((s) => {
+          // Include cost columns here too — the flat and path-grouped rows carry
+          // them, and the user-toggleable Unit/Ext Cost columns would otherwise
+          // render blank in the category view whenever Sort is None.
+          const uc = cableCosts?.[cableCostKey(s.cableType, s.signalType, s.cableLength)] ?? 0;
+          return {
+            count: `${s.count}x`,
+            cableType: s.cableType,
+            signalType: s.signalType,
+            cableLength: s.cableLength,
+            route: s.route,
+            unitCost: uc > 0 ? `$${uc.toFixed(2)}` : "",
+            extCost: uc > 0 ? `$${(uc * s.count).toFixed(2)}` : "",
+          };
+        }),
+      ]),
+    );
+    if (adapterCableRows.length > 0) cableGroupedRows.set("Adapters", adapterCableRows);
+  }
+
+  // Apply sorting
+  const sortRows = (rows: Record<string, string>[], sortBy: string | null | undefined, sortDir: "asc" | "desc" | undefined) => {
+    if (!sortBy) return rows;
+    const dir = sortDir === "desc" ? -1 : 1;
+    return [...rows].sort((a, b) => {
+      const va = a[sortBy] ?? "";
+      const vb = b[sortBy] ?? "";
+      // Try numeric comparison for Qty column
+      const na = parseFloat(va);
+      const nb = parseFloat(vb);
+      if (!isNaN(na) && !isNaN(nb)) return (na - nb) * dir;
+      return va.localeCompare(vb) * dir;
+    });
+  };
+
+  const sortedDeviceRows = sortRows(deviceRows, devicesTableDef?.sortBy, devicesTableDef?.sortDir);
+  const sortedCableRows = sortRows(cableRows, cablesTableDef?.sortBy, cablesTableDef?.sortDir);
+
+  // Re-group after sorting if needed
+  let sortedDeviceGrouped = deviceGroupedRows;
+  if (devGroupBy === "room" && devicesTableDef?.sortBy) {
+    sortedDeviceGrouped = groupBy(sortedDeviceRows, (r) => r.room);
+  } else if (devGroupBy === "deviceType" && devicesTableDef?.sortBy) {
+    sortedDeviceGrouped = groupBy(sortedDeviceRows, (r) => r.deviceType || "Other");
+  }
+
+  let sortedCableGrouped = cableGroupedRows;
+  if (cabGroupBy === "path" && cablesTableDef?.sortBy) {
+    sortedCableGrouped = groupBy(sortedCableRows.filter((r) => r.signalType !== ""), (r) =>
+      routeRoomKey(r.route),
+    );
+    if (adapterCableRows.length > 0) sortedCableGrouped.set("Adapters", adapterCableRows);
+  } else if (cabGroupBy === "category" && cablesTableDef?.sortBy) {
+    // Re-group sorted rows by category, preserving category order
+    sortedCableGrouped = new Map(
+      groupCablesByCategory(summarySource).map((g): [string, Record<string, string>[]] => {
+        const catSignals = new Set(g.rows.map((r) => r.signalType));
+        return [g.category, sortedCableRows.filter((r) => catSignals.has(r.signalType))];
+      }).filter(([, rows]) => rows.length > 0),
+    );
+    if (adapterCableRows.length > 0) sortedCableGrouped.set("Adapters", adapterCableRows);
+  }
+
+  // Accessories table
+  const accessoriesTableDef = layout.tables.find((t) => t.id === "accessories");
+  const accessoryRows = data.accessories.map((a) => ({
+    count: `${a.count}x`,
+    model: a.model,
+    accessoryType: a.accessoryType,
+    room: a.room,
+  }));
+
+  const sortedAccessoryRows = sortRows(accessoryRows, accessoriesTableDef?.sortBy, accessoriesTableDef?.sortDir);
+
+  let accessoryGroupedRows: Map<string, Record<string, string>[]> | undefined;
+  if (accessoriesTableDef?.groupBy === "room") {
+    accessoryGroupedRows = groupBy(sortedAccessoryRows, (r) => r.room);
+  }
+
+  // Racks table (#P2-024)
+  const racksTableDef = layout.tables.find((t) => t.id === "racks");
+  const rackRows = data.racks.map((r) => ({
+    count: `${r.count}x`,
+    label: r.label,
+    rackType: r.rackType,
+    heightU: `${r.heightU}U`,
+    room: r.room,
+    unitCost: r.unitCost > 0 ? `$${r.unitCost.toFixed(2)}` : "",
+    extCost: r.unitCost > 0 ? `$${(r.unitCost * r.count).toFixed(2)}` : "",
+  }));
+  const sortedRackRows = sortRows(rackRows, racksTableDef?.sortBy, racksTableDef?.sortDir);
+  let rackGroupedRows: Map<string, Record<string, string>[]> | undefined;
+  if (racksTableDef?.groupBy === "room") {
+    rackGroupedRows = groupBy(sortedRackRows, (r) => r.room);
+  }
+
+  return [
+    {
+      id: "devices",
+      rows: sortedDeviceRows,
+      groupedRows: sortedDeviceGrouped,
+    },
+    {
+      id: "cables",
+      rows: sortedCableRows,
+      groupedRows: sortedCableGrouped,
+    },
+    {
+      id: "accessories",
+      rows: sortedAccessoryRows,
+      groupedRows: accessoryGroupedRows,
+    },
+    {
+      id: "racks",
+      rows: sortedRackRows,
+      groupedRows: rackGroupedRows,
+    },
+  ];
+}

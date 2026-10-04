@@ -1,0 +1,752 @@
+import { memo, useState, useRef, useEffect } from "react";
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  type EdgeProps,
+} from "@xyflow/react";
+import { useSchematicStore } from "../store";
+import { LINE_STYLE_DASHARRAY, type ConnectionEdge, type LineStyle } from "../types";
+import { usbcPowerShortfallW } from "../connectorTypes";
+import { resolvePort } from "../packList";
+import { midCustomLabelPlacement } from "../stubPlacement";
+import { computeEdgeLengthEstimate, resolveCableLengthLabel } from "../cableLengthLabel";
+import { showPathEditHint, soleSelectedCableId } from "../pathEditHint";
+
+function OffsetEdgeComponent({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  style,
+  markerEnd,
+  selected,
+  interactionWidth,
+}: EdgeProps<ConnectionEdge>) {
+  const debugEdges = useSchematicStore((s) => s.debugEdges);
+  const debugShowLabels = useSchematicStore((s) => s.debugShowLabels);
+
+  // Hover state for showing visual reconnect indicators in HTML layer
+  const [isHovered, setIsHovered] = useState(false);
+  // Tooltip state — tracks which updater circle the mouse is over
+  const [tooltipType, setTooltipType] = useState<"source" | "target" | null>(null);
+
+  useEffect(() => {
+    const el = document.querySelector(`.react-flow__edge[data-id="${id}"]`);
+    if (!el) return;
+    const onEnter = () => setIsHovered(true);
+    const onLeave = () => { setIsHovered(false); setTooltipType(null); };
+    el.addEventListener("mouseenter", onEnter);
+    el.addEventListener("mouseleave", onLeave);
+
+    // Track hover on individual updater circles for tooltip
+    const srcUpdater = el.querySelector('.react-flow__edgeupdater-source');
+    const tgtUpdater = el.querySelector('.react-flow__edgeupdater-target');
+    const onEnterSrc = () => setTooltipType("source");
+    const onEnterTgt = () => setTooltipType("target");
+    const onLeaveUpdater = () => setTooltipType(null);
+    srcUpdater?.addEventListener('mouseenter', onEnterSrc);
+    tgtUpdater?.addEventListener('mouseenter', onEnterTgt);
+    srcUpdater?.addEventListener('mouseleave', onLeaveUpdater);
+    tgtUpdater?.addEventListener('mouseleave', onLeaveUpdater);
+
+    return () => {
+      el.removeEventListener("mouseenter", onEnter);
+      el.removeEventListener("mouseleave", onLeave);
+      srcUpdater?.removeEventListener('mouseenter', onEnterSrc);
+      tgtUpdater?.removeEventListener('mouseenter', onEnterTgt);
+      srcUpdater?.removeEventListener('mouseleave', onLeaveUpdater);
+      tgtUpdater?.removeEventListener('mouseleave', onLeaveUpdater);
+    };
+  }, [id]);
+
+  // Read pre-computed route from store (serialized to string to avoid re-render loops)
+  const routeStr = useSchematicStore((s) => {
+    const r = s.routedEdges[id];
+    if (!r) return "";
+    const path = (s.showLineJumps && r.svgPathWithHops) || r.svgPath;
+    return `${path}\0${r.labelX}\0${r.labelY}\0${r.turns}`;
+  });
+
+  // Read connector mismatch flag (stable primitive selector)
+  const connectorMismatch = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge?.data?.connectorMismatch === true;
+  });
+
+  // USB-C Power Delivery shortfall — derived live from the connected ports (wattage is
+  // edited after the connection exists, so it can't be a flag frozen at creation time).
+  // Returns the deficit in watts, or null when adequately supplied / not applicable.
+  const usbcShortfall = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    if (!edge) return null;
+    const portFor = (nodeId: string, handle: string | null | undefined) =>
+      resolvePort(s.nodes.find((n) => n.id === nodeId), handle);
+    return usbcPowerShortfallW(
+      portFor(edge.source, edge.sourceHandle),
+      portFor(edge.target, edge.targetHandle),
+    );
+  });
+
+  // Check if this edge is hidden (part of a virtual pair, the secondary half)
+  const isHiddenVirtualEdge = useSchematicStore((s) => s.hiddenVirtualEdgeIds.has(id));
+
+  // Check if this edge is the primary half of a virtual pair (target is a hidden adapter)
+  const isVirtualPrimary = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge ? s.hiddenAdapterNodeIds.has(edge.target) : false;
+  });
+
+  // Check if this edge should render as a gradient (virtual edge bridging different signal types)
+  const gradientColors = useSchematicStore((s) => {
+    const g = s.virtualEdgeGradients[id];
+    if (!g) return "";
+    return `${g.sourceColor}\0${g.targetColor}`;
+  });
+
+  // Read allow incompatible override (stable primitive selector)
+  const allowIncompatible = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge?.data?.allowIncompatible === true;
+  });
+
+  // Read direct-attach flag (edge represents physical plug-in, not a cable)
+  const directAttach = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge?.data?.directAttach === true;
+  });
+
+  // Read user-defined connection label (stable primitive selector)
+  const edgeLabel = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return (edge?.data?.label as string) ?? "";
+  });
+  // Per-end label overrides (#114)
+  const edgeSourceLabel = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return (edge?.data?.sourceLabel as string) ?? "";
+  });
+  const edgeTargetLabel = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return (edge?.data?.targetLabel as string) ?? "";
+  });
+
+  // Cable ID label from pre-computed map
+  const showCableIdLabels = useSchematicStore((s) => s.showCableIdLabels);
+  const showCustomLabels = useSchematicStore((s) => s.showCustomLabels);
+  const globalCableIdGap = useSchematicStore((s) => s.cableIdGap);
+  const globalCableIdMidOffset = useSchematicStore((s) => s.cableIdMidOffset);
+  const globalCableIdLabelMode = useSchematicStore((s) => s.cableIdLabelMode);
+  const cableId = useSchematicStore((s) => s.cableIdMap[id] ?? "");
+  const hideCableId = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge?.data?.hideCableId === true || edge?.data?.hideLabel === true;
+  });
+  const edgeCableIdGap = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge?.data?.cableIdGap as number | undefined;
+  });
+  const edgeCableIdMidOffset = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge?.data?.cableIdMidOffset as number | undefined;
+  });
+  const edgeCableIdLabelMode = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    return edge?.data?.cableIdLabelMode as "endpoint" | "midpoint" | undefined;
+  });
+
+  // Cable-length label (#100). Resolved to a display string here (a stable primitive
+  // selector): an explicit per-edge override wins, else the room-distance estimate.
+  // Empty when the toggle is off, on direct-attach edges, or when nothing is known.
+  const cableLengthLabel = useSchematicStore((s) => {
+    if (!s.showCableLengthLabels) return "";
+    const edge = s.edges.find((e) => e.id === id);
+    if (!edge || edge.data?.directAttach) return "";
+    const srcNode = s.nodes.find((n) => n.id === edge.source);
+    const tgtNode = s.nodes.find((n) => n.id === edge.target);
+    const computed = computeEdgeLengthEstimate(
+      srcNode?.parentId,
+      tgtNode?.parentId,
+      s.nodes,
+      s.roomDistances,
+      s.distanceSettings,
+    );
+    return resolveCableLengthLabel(edge.data?.cableLength as string | undefined, computed);
+  });
+
+  // Endpoint cable-ID labels are suppressed at any stub-label endpoint — the stub box
+  // itself already identifies the connection there; printing the cable ID at both the
+  // device port AND the stub label would yield 4 IDs per logical cable instead of 2.
+  const sourceIsStub = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    if (!edge) return false;
+    return s.nodes.find((n) => n.id === edge.source)?.type === "stub-label";
+  });
+  const targetIsStub = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    if (!edge) return false;
+    return s.nodes.find((n) => n.id === edge.target)?.type === "stub-label";
+  });
+
+  // Read effective line style: per-connection override > per-signal-type default > solid
+  const lineStyle = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    if (edge?.data?.lineStyle) return edge.data.lineStyle as LineStyle;
+    const signalType = edge?.data?.signalType;
+    if (signalType && s.signalLineStyles?.[signalType]) return s.signalLineStyles[signalType]!;
+    return "solid" as LineStyle;
+  });
+
+  // Read routed waypoints (serialized for stability)
+  const routeWpStr = useSchematicStore((s) => {
+    const r = s.routedEdges[id];
+    if (!r?.waypoints?.length) return "";
+    return r.waypoints.map((p) => `${p.x},${p.y}`).join("|");
+  });
+
+  // Read manual waypoints directly (serialized for stable selector)
+  const manualWpStr = useSchematicStore((s) => {
+    const edge = s.edges.find((e) => e.id === id);
+    if (!edge?.data?.manualWaypoints?.length) return "";
+    return edge.data.manualWaypoints.map((p) => `${p.x},${p.y}`).join("|");
+  });
+
+  const isManual = manualWpStr.length > 0;
+
+  // Whether this cable is the sole selection (for the path-edit hint, #275).
+  // soleSelectedCableId scans nodes+edges once per store commit (shared cache),
+  // so each edge instance only compares its own id.
+  const isSoleSelectedCable = useSchematicStore(
+    (s) => soleSelectedCableId(s.nodes, s.edges) === id,
+  );
+
+  // User-placed handles of any kind — manual waypoints or stub-leg waypoints.
+  // Hint-scoped: false for every cable except the sole selection, so only the
+  // one hint-eligible cable pays for the lookup.
+  const hintCableHasOwnWaypoints = useSchematicStore((s) => {
+    if (soleSelectedCableId(s.nodes, s.edges) !== id) return false;
+    const edge = s.edges.find((e) => e.id === id);
+    return !!(
+      edge?.data?.manualWaypoints?.length ||
+      edge?.data?.stubSourceWaypoints?.length ||
+      edge?.data?.stubTargetWaypoints?.length
+    );
+  });
+
+  let edgePath: string;
+  let lx: number;
+  let ly: number;
+  let turns: string;
+
+  if (routeStr) {
+    const parts = routeStr.split("\0");
+    edgePath = parts[0];
+    lx = Number(parts[1]);
+    ly = Number(parts[2]);
+    turns = parts[3];
+  } else {
+    edgePath = `M ${sourceX} ${sourceY} L ${sourceX} ${sourceY}`;
+    lx = sourceX;
+    ly = sourceY;
+    turns = "pending";
+  }
+
+  // Gradient for virtual edges bridging different signal types
+  const hasGradient = gradientColors.length > 0;
+  const gradientId = hasGradient ? `gradient-${id}` : "";
+  let gradientDef: React.ReactNode = null;
+  if (hasGradient && routeStr) {
+    const [srcColor, tgtColor] = gradientColors.split("\0");
+    // Use the first and last waypoints for gradient direction
+    const routeData = useSchematicStore.getState().routedEdges[id];
+    const wps = routeData?.waypoints;
+    if (wps && wps.length >= 2) {
+      const first = wps[0];
+      const last = wps[wps.length - 1];
+      gradientDef = (
+        <defs>
+          <linearGradient
+            id={gradientId}
+            gradientUnits="userSpaceOnUse"
+            x1={first.x}
+            y1={first.y}
+            x2={last.x}
+            y2={last.y}
+          >
+            <stop offset="0%" stopColor={srcColor} />
+            <stop offset="100%" stopColor={tgtColor} />
+          </linearGradient>
+        </defs>
+      );
+    }
+  }
+
+  const edgeStyle = routeStr
+    ? {
+        ...style,
+        ...(directAttach
+          ? { stroke: "#9ca3af", strokeWidth: selected ? 2 : 1 }
+          : { strokeWidth: selected ? 3 : 2 }),
+        ...(connectorMismatch && !allowIncompatible
+          ? { strokeDasharray: "6 3" }
+          : LINE_STYLE_DASHARRAY[lineStyle]
+            ? { strokeDasharray: LINE_STYLE_DASHARRAY[lineStyle] }
+            : {}),
+        // USB-C power undersupply: amber dashed cue (yields to a gradient edge, which is rare here)
+        ...(usbcShortfall != null && !hasGradient ? { stroke: "#f59e0b", strokeDasharray: "5 3" } : {}),
+        ...(hasGradient ? { stroke: `url(#${gradientId})` } : {}),
+      }
+    : { ...style, strokeWidth: 0, opacity: 0 };
+
+  // Show label at both source and target ends so it's visible even if the path goes behind a device
+  const debugLabel = (debugEdges && debugShowLabels) ? (
+    <>
+      <foreignObject
+        x={sourceX + 4}
+        y={sourceY - 7}
+        width={1}
+        height={1}
+        style={{ pointerEvents: "none", overflow: "visible" }}
+      >
+        <div style={{
+          fontSize: 9,
+          fontFamily: "monospace",
+          fontWeight: 700,
+          color: "#e44",
+          background: "rgba(255,255,255,0.9)",
+          padding: "0 3px",
+          borderRadius: 2,
+          whiteSpace: "nowrap",
+          width: "max-content",
+          border: "1px solid #fcc",
+        }}>
+          {id}{isManual ? " [manual]" : ""}
+        </div>
+      </foreignObject>
+      <foreignObject
+        x={targetX - 4}
+        y={targetY - 7}
+        width={1}
+        height={1}
+        style={{ pointerEvents: "none", overflow: "visible" }}
+      >
+        <div style={{
+          fontSize: 9,
+          fontFamily: "monospace",
+          fontWeight: 700,
+          color: "#e44",
+          background: "rgba(255,255,255,0.9)",
+          padding: "0 3px",
+          borderRadius: 2,
+          whiteSpace: "nowrap",
+          width: "max-content",
+          direction: "rtl",
+          border: "1px solid #fcc",
+        }}>
+          {id}
+        </div>
+      </foreignObject>
+    </>
+  ) : null;
+
+  // Compute direction vectors at source and target from routed waypoints
+  // (needed early for stub exit direction and label positioning)
+  let srcDx = 0, srcDy = 0, tgtDx = 0, tgtDy = 0;
+  if (routeWpStr) {
+    const wps = routeWpStr.split("|").map((s) => {
+      const [x, y] = s.split(",");
+      return { x: Number(x), y: Number(y) };
+    });
+    if (wps.length >= 2) {
+      const sdx = wps[1].x - wps[0].x;
+      const sdy = wps[1].y - wps[0].y;
+      const slen = Math.sqrt(sdx * sdx + sdy * sdy);
+      if (slen > 0) { srcDx = sdx / slen; srcDy = sdy / slen; }
+      const tdx = wps[wps.length - 1].x - wps[wps.length - 2].x;
+      const tdy = wps[wps.length - 1].y - wps[wps.length - 2].y;
+      const tlen = Math.sqrt(tdx * tdx + tdy * tdy);
+      if (tlen > 0) { tgtDx = tdx / tlen; tgtDy = tdy / tlen; }
+    }
+  }
+
+  // --- Label rendering (#5, #61, #114) ---
+  const signalColor = (style?.stroke as string) ?? "#6b7280";
+  const labelText = cableId;
+  const cableIdGap = edgeCableIdGap ?? globalCableIdGap;
+  const cableIdLabelMode = edgeCableIdLabelMode ?? globalCableIdLabelMode;
+  const cidMidOff = edgeCableIdMidOffset ?? globalCableIdMidOffset;
+  // Custom labels use a fixed endpoint gap (#114 rework — no longer user-tunable).
+  const CUSTOM_LABEL_GAP = 4;
+
+  // Build cumulative distances along the routed path (shared by midpoint calculations)
+  let pathWps: { x: number; y: number }[] = [];
+  let cumDist: number[] = [];
+  let totalLen = 0;
+  if (routeWpStr) {
+    pathWps = routeWpStr.split("|").map((s) => {
+      const [wx, wy] = s.split(",");
+      return { x: Number(wx), y: Number(wy) };
+    });
+    if (pathWps.length >= 2) {
+      cumDist = [0];
+      for (let i = 1; i < pathWps.length; i++) {
+        const ddx = pathWps[i].x - pathWps[i - 1].x;
+        const ddy = pathWps[i].y - pathWps[i - 1].y;
+        cumDist.push(cumDist[i - 1] + Math.sqrt(ddx * ddx + ddy * ddy));
+      }
+      totalLen = cumDist[cumDist.length - 1];
+    }
+  }
+
+  // Interpolate a point + direction along the path at a given distance from the start
+  const pointAtDistance = (dist: number): { x: number; y: number; dx: number; dy: number } => {
+    const d = Math.max(0, Math.min(totalLen, dist));
+    for (let i = 1; i < cumDist.length; i++) {
+      if (cumDist[i] >= d) {
+        const segLen = cumDist[i] - cumDist[i - 1];
+        const t = segLen > 0 ? (d - cumDist[i - 1]) / segLen : 0;
+        const sdx = pathWps[i].x - pathWps[i - 1].x;
+        const sdy = pathWps[i].y - pathWps[i - 1].y;
+        const len = Math.sqrt(sdx * sdx + sdy * sdy);
+        return {
+          x: pathWps[i - 1].x + t * sdx,
+          y: pathWps[i - 1].y + t * sdy,
+          dx: len > 0 ? sdx / len : 1,
+          dy: len > 0 ? sdy / len : 0,
+        };
+      }
+    }
+    const last = pathWps.length > 0 ? pathWps[pathWps.length - 1] : { x: lx, y: ly };
+    return { ...last, dx: 1, dy: 0 };
+  };
+
+  const cableIdLabelStyle: React.CSSProperties = {
+    position: "absolute",
+    pointerEvents: "none",
+    fontSize: 9,
+    fontFamily: "Inter, system-ui, sans-serif",
+    fontWeight: 600,
+    color: "#374151",
+    background: "rgba(255,255,255,0.92)",
+    padding: "0 3px",
+    borderRadius: 2,
+    whiteSpace: "nowrap",
+    border: `1px solid ${signalColor}`,
+  };
+
+  // Custom labels match the cable-ID badge in size and color (font 9, signal-colored
+  // border) so the two read as one consistent set instead of the custom label being
+  // greyer and a touch larger. (#209)
+  const customLabelStyle: React.CSSProperties = {
+    position: "absolute",
+    pointerEvents: "none",
+    fontSize: 9,
+    fontFamily: "Inter, system-ui, sans-serif",
+    fontWeight: 600,
+    color: "#374151",
+    background: "rgba(255,255,255,0.92)",
+    padding: "0 3px",
+    borderRadius: 2,
+    whiteSpace: "nowrap",
+    border: `1px solid ${signalColor}`,
+  };
+
+  // Estimate badge width from text length (for offset positioning)
+  const estimateBadgeWidth = (text: string, fontSize: number, paddingH: number) =>
+    text.length * fontSize * 0.58 + paddingH * 2 + 2; // +2 for border
+
+  // Build a positioned endpoint label that follows the cable path
+  const makeEndpointLabel = (
+    fromSource: boolean, offset: number,
+    text: string, labelStyle: React.CSSProperties, key: string,
+    // Fallbacks when no routed path is available
+    fallbackX: number, fallbackY: number, fallbackDx: number, fallbackDy: number,
+  ) => {
+    let px: number, py: number, dirDx: number, dirDy: number;
+    if (totalLen > 0) {
+      // Walk along the path from source or target end
+      const dist = fromSource ? offset : totalLen - offset;
+      const pt = pointAtDistance(dist);
+      px = pt.x;
+      py = pt.y;
+      // Direction pointing away from the endpoint (for anchor alignment)
+      dirDx = fromSource ? pt.dx : -pt.dx;
+      dirDy = fromSource ? pt.dy : -pt.dy;
+    } else {
+      // No route yet — fall back to straight-line offset
+      const isHoriz = Math.abs(fallbackDx) >= Math.abs(fallbackDy);
+      px = isHoriz ? fallbackX + Math.sign(fallbackDx) * offset : fallbackX;
+      py = isHoriz ? fallbackY : fallbackY + Math.sign(fallbackDy) * offset;
+      dirDx = fallbackDx;
+      dirDy = fallbackDy;
+    }
+    const isHoriz = Math.abs(dirDx) >= Math.abs(dirDy);
+    const anchorX = isHoriz ? (dirDx < 0 ? "-100%" : "0%") : "-50%";
+    const anchorY = isHoriz ? "-50%" : (dirDy < 0 ? "-100%" : "0%");
+
+    return (
+      <div
+        key={key}
+        style={{
+          ...labelStyle,
+          transform: `translate(${anchorX}, ${anchorY}) translate(${px}px, ${py}px)`,
+        }}
+      >
+        {text}
+      </div>
+    );
+  };
+
+  // For virtual primary edges, the target label should be at the end of the routed path
+  // (not at the hidden adapter's handle position)
+  let tgtLabelX = targetX;
+  let tgtLabelY = targetY;
+  if (isVirtualPrimary && routeWpStr) {
+    const wps = routeWpStr.split("|").map((s) => {
+      const [x, y] = s.split(",");
+      return { x: Number(x), y: Number(y) };
+    });
+    if (wps.length >= 1) {
+      tgtLabelX = wps[wps.length - 1].x;
+      tgtLabelY = wps[wps.length - 1].y;
+    }
+  }
+
+  // Determine which labels to show
+  const showCableId = showCableIdLabels && !hideCableId && labelText && routeStr;
+  const showAnyCustom = !!showCustomLabels && !!routeStr;
+
+  // Each custom label slot is visible iff its text is non-empty (#114 rework).
+  const showSrcLabel = showAnyCustom && !!edgeSourceLabel;
+  const showMidLabel = showAnyCustom && !!edgeLabel;
+  const showTgtLabel = showAnyCustom && !!edgeTargetLabel;
+
+  // Middle custom label placement. Normal edges keep it at the geometric
+  // midpoint; a stub leg anchors it to the stub end so it reads between the
+  // cable ID and the stub-label box (#201).
+  const midPlacement = midCustomLabelPlacement(sourceIsStub, targetIsStub);
+  const midAtMidpoint = showMidLabel && midPlacement.mode === "midpoint";
+
+  // Calculate custom label endpoint offset (past cable ID badge when cable ID is also at the same endpoint)
+  const cableIdBadgeWidth = labelText ? estimateBadgeWidth(labelText, 9, 3) : 0;
+  const customEndpointOffset = (showCableId && cableIdLabelMode === "endpoint")
+    ? cableIdGap + cableIdBadgeWidth + 3 // base gap + badge + 3px padding
+    : CUSTOM_LABEL_GAP;
+
+  // Compute midpoint position along the path (for cable ID midpoint and custom midpoint label).
+  // When a custom middle label shares the midpoint, the cable ID is nudged further along
+  // the route so the two render side by side instead of stacking on top of each other —
+  // the custom label stays centered, the cable ID sits just past it (#175). A stub leg's
+  // custom label is anchored to the stub end, not the midpoint, so no nudge is needed.
+  const midPairOffset = midAtMidpoint
+    ? estimateBadgeWidth(edgeLabel, 9, 3) / 2 + estimateBadgeWidth(labelText, 9, 3) / 2 + 6
+    : 0;
+  const cidMidPt = totalLen > 0 ? pointAtDistance(totalLen / 2 + cidMidOff + midPairOffset) : { x: lx, y: ly };
+  const customMidPt = totalLen > 0 ? pointAtDistance(totalLen / 2) : { x: lx, y: ly };
+
+  // Cable ID labels — at endpoints or midpoint depending on mode.
+  const cableIdLabels = showCableId ? (
+    cableIdLabelMode === "endpoint" ? (
+      <>
+        {!sourceIsStub && makeEndpointLabel(true, cableIdGap, labelText, cableIdLabelStyle, "cid-src",
+          sourceX, sourceY, srcDx, srcDy)}
+        {!targetIsStub && makeEndpointLabel(false, cableIdGap, labelText, cableIdLabelStyle, "cid-tgt",
+          tgtLabelX, tgtLabelY, -tgtDx, -tgtDy)}
+      </>
+    ) : (
+      <div
+        key="cid-mid"
+        style={{
+          ...cableIdLabelStyle,
+          transform: `translate(-50%, -50%) translate(${cidMidPt.x}px, ${cidMidPt.y}px)`,
+        }}
+      >
+        {labelText}
+      </div>
+    )
+  ) : null;
+
+  // The stub end never carries a cable ID (suppressed above), so the stub-anchored
+  // middle label uses the plain custom-label gap rather than the cable-ID-aware
+  // endpoint offset (#201).
+  const midCustomLabel = showMidLabel
+    ? (midPlacement.mode === "stub-end"
+        ? makeEndpointLabel(
+            midPlacement.fromSource, CUSTOM_LABEL_GAP, edgeLabel, customLabelStyle, "clbl-mid",
+            midPlacement.fromSource ? sourceX : tgtLabelX,
+            midPlacement.fromSource ? sourceY : tgtLabelY,
+            midPlacement.fromSource ? srcDx : -tgtDx,
+            midPlacement.fromSource ? srcDy : -tgtDy,
+          )
+        : (
+          <div
+            key="clbl-mid"
+            style={{
+              ...customLabelStyle,
+              transform: `translate(-50%, -50%) translate(${customMidPt.x}px, ${customMidPt.y}px)`,
+            }}
+          >
+            {edgeLabel}
+          </div>
+        ))
+    : null;
+
+  // Custom labels — three independent slots (#114 rework). Each renders if its text is set.
+  const customLabels = (showSrcLabel || showMidLabel || showTgtLabel) ? (
+    <>
+      {showSrcLabel && makeEndpointLabel(true, customEndpointOffset, edgeSourceLabel, customLabelStyle, "clbl-src",
+        sourceX, sourceY, srcDx, srcDy)}
+      {midCustomLabel}
+      {showTgtLabel && makeEndpointLabel(false, customEndpointOffset, edgeTargetLabel, customLabelStyle, "clbl-tgt",
+        tgtLabelX, tgtLabelY, -tgtDx, -tgtDy)}
+    </>
+  ) : null;
+
+  // USB-C power undersupply badge — amber pill at the midpoint stating the shortfall.
+  const usbcWarningBadge = usbcShortfall != null ? (
+    <div
+      key="usbc-undersupply"
+      title={`USB-C power undersupply: source delivers ${usbcShortfall}W less than the connected device draws`}
+      style={{
+        position: "absolute",
+        transform: `translate(-50%, -50%) translate(${customMidPt.x}px, ${customMidPt.y}px)`,
+        fontSize: 9,
+        fontWeight: 700,
+        lineHeight: 1.4,
+        color: "#fff",
+        background: "#f59e0b",
+        padding: "0 4px",
+        borderRadius: 4,
+        whiteSpace: "nowrap",
+        pointerEvents: "auto",
+      }}
+    >
+      ⚡ −{usbcShortfall}W
+    </div>
+  ) : null;
+
+  // Cable-length badge (#100) — one per cable at the midpoint, nudged below the
+  // centre so it clears a midpoint cable ID / custom label. Styled like the cable-ID
+  // badge for a consistent set. Double-click opens the length editor (writes the same
+  // cableLength field the schedule reads), matching how edge labels are edited here.
+  const cableLengthBadge = (cableLengthLabel && routeStr) ? (
+    <div
+      key="cable-length"
+      title="Double-click to set cable length"
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        useSchematicStore.setState({
+          edgeContextMenu: {
+            edgeId: id,
+            screenX: e.clientX,
+            screenY: e.clientY,
+            flowX: customMidPt.x,
+            flowY: customMidPt.y,
+            initialEdit: "length",
+          },
+        });
+      }}
+      style={{
+        ...cableIdLabelStyle,
+        pointerEvents: "auto",
+        cursor: "pointer",
+        transform: `translate(-50%, -50%) translate(${customMidPt.x}px, ${customMidPt.y + 14}px)`,
+      }}
+    >
+      {cableLengthLabel}
+    </div>
+  ) : null;
+
+  // Visual-only reconnect circles + tooltip — rendered in HTML layer above cable labels.
+  // Interaction is handled by RF's native SVG updater circles (pointer events pass through
+  // labels since they have pointer-events: none). These HTML elements are purely decorative.
+  const RECONNECT_OFFSET = 12; // matches reconnectRadius prop on <ReactFlow>
+  const showReconnect = (selected || isHovered) && routeStr;
+  const srcVisualX = sourceX + srcDx * RECONNECT_OFFSET;
+  const srcVisualY = sourceY + srcDy * RECONNECT_OFFSET;
+  const tgtVisualX = targetX - tgtDx * RECONNECT_OFFSET;
+  const tgtVisualY = targetY - tgtDy * RECONNECT_OFFSET;
+
+  const reconnectVisuals = showReconnect ? (
+    <>
+      <div className="reconnect-visual"
+        style={{ transform: `translate(-50%, -50%) translate(${srcVisualX}px, ${srcVisualY}px)` }} />
+      <div className="reconnect-visual"
+        style={{ transform: `translate(-50%, -50%) translate(${tgtVisualX}px, ${tgtVisualY}px)` }} />
+      {tooltipType === "source" && (
+        <div className="reconnect-tooltip"
+          style={{ transform: `translate(-50%, -100%) translate(${srcVisualX}px, ${srcVisualY - 10}px)` }}>
+          Drag to reroute
+        </div>
+      )}
+      {tooltipType === "target" && (
+        <div className="reconnect-tooltip"
+          style={{ transform: `translate(-50%, -100%) translate(${tgtVisualX}px, ${tgtVisualY - 10}px)` }}>
+          Drag to reroute
+        </div>
+      )}
+    </>
+  ) : null;
+
+  // Path-edit discoverability hint (#275) — a lone selected cable with no handles yet
+  // points at the right-click menu where Add Handle lives.
+  const pathEditHint = showPathEditHint({
+    soleSelected: !!selected && isSoleSelectedCable,
+    hasRoute: !!routeStr,
+    hasOwnWaypoints: hintCableHasOwnWaypoints,
+    directAttach,
+  }) ? (
+    <div
+      className="reconnect-tooltip"
+      style={{ transform: `translate(-50%, -100%) translate(${customMidPt.x}px, ${customMidPt.y - 12}px)` }}
+    >
+      Right-click cable to add a path handle
+    </div>
+  ) : null;
+
+  // All labels + reconnect visuals rendered via EdgeLabelRenderer (HTML layer above all SVG edges)
+  const hasPortalContent = customLabels || cableIdLabels || reconnectVisuals || usbcWarningBadge || cableLengthBadge || pathEditHint;
+  const edgeLabelsPortal = hasPortalContent ? (
+    <EdgeLabelRenderer>
+      {cableIdLabels}
+      {customLabels}
+      {cableLengthBadge}
+      {usbcWarningBadge}
+      {reconnectVisuals}
+      {pathEditHint}
+    </EdgeLabelRenderer>
+  ) : null;
+
+  // Log routing data when debug mode is active
+  const prevDebugRef = useRef(false);
+  useEffect(() => {
+    if (debugEdges && !prevDebugRef.current) {
+      console.log(`[EDGE_DEBUG] ${id} | src=${Math.round(sourceX)},${Math.round(sourceY)} tgt=${Math.round(targetX)},${Math.round(targetY)} | ${turns}`);
+    }
+    prevDebugRef.current = debugEdges;
+  }, [debugEdges, id, sourceX, sourceY, targetX, targetY, turns]);
+
+  // Hidden virtual edges (secondary half of adapter pair) — render nothing
+  if (isHiddenVirtualEdge) {
+    return null;
+  }
+
+  return (
+    <>
+      {gradientDef}
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        labelX={lx}
+        labelY={ly}
+        style={edgeStyle}
+        markerEnd={markerEnd}
+        interactionWidth={interactionWidth}
+      />
+      {edgeLabelsPortal}
+      {debugLabel}
+    </>
+  );
+}
+
+export default memo(OffsetEdgeComponent);

@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install API dependencies
+        run: cd api && npm ci
+
+      # Separate package with its own lockfile — nothing else installs it, so
+      # without this step its tests never run anywhere.
+      - name: Install MCP server dependencies
+        run: cd mcp-server && npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # src/deviceLibrary.fallback.json is gitignored, and templateApi.ts imports it —
+      # so a fresh checkout can't run the tests until it's generated. `npm run build`
+      # does this too, but the tests should fail fast, before the slower vite build.
+      - name: Generate device library fallback
+        run: npm run generate-fallback
+
+      - name: Unit tests
+        run: npm test
+
+      # The headless harness is the routing oracle — it re-routes every fixture and
+      # fails on any diff, so an accidental pathfinding change can't land silently.
+      - name: Routing regression check
+        run: npm run routing:check
+
+      - name: Type-check and build
+        run: npm run build
+
+      # `npm test` here runs its pretest build first, which regenerates
+      # protocol.generated.ts from src/mcp/protocol.ts — so a protocol change in
+      # the app that breaks the server fails CI instead of drifting silently.
+      - name: MCP server build + tests
+        run: cd mcp-server && npm test
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts starts its own `npm run dev` when CI is set. There's no
+      # API worker here and no .env.local, so the app runs on the bundled device
+      # library — the same degraded path the #181 spec asserts on purpose.
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: e2e/test-results/
+          retention-days: 7
